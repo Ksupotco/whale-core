@@ -3,9 +3,10 @@
 ## 范围与结论
 
 本评测对接 [TimlMemBench 官方仓库](https://github.com/lyirs/TimlMemBench)
-`raw_native_cases` JSONL 协议，使用 `zh` 全集。它是**离线记忆结构诊断**，
-不是论文可比的端到端问答分数：回答模型是固定的 `<ABSTAIN>` 探针，
-官方 LLM 语义裁判未运行，也未提供可验证的用户授权上下文。
+`raw_native_cases` JSONL 协议，使用 `zh` 全集。已运行结果是**离线记忆结构诊断**，
+不是论文可比的端到端问答分数：该轮回答模型是固定的 `<ABSTAIN>` 探针，
+官方 LLM 语义裁判未运行，也未提供可验证的用户授权上下文。适配器另有
+`--answer-mode gpt4o`，需显式 API key 和查询次数上限，尚未执行真实请求。
 
 数据集原始会话是两个人的既有对话；`WhaleCompanion.chat()` 则会生成新的
 助手回复。为了不伪造历史，本适配器把每条原始发言保存为 `chat` 情节，
@@ -61,6 +62,21 @@ D:\anaconda3\python.exe code\run_baseline_predictions.py `
 2. 接入固定的回答模型、温度与预算，记录写入和问答 token、延迟及成本。小样本校验后才运行全量。
 3. 用官方语义裁判评估答案，并与同模型的 No Memory 对照；启发式评分仅用于协议烟测。
 4. 在同一协议上逐步测试自动提取、去重和冲突更新，再加隔离、撤销及删除负向测试。
+
+GPT-4o 小样本命令示例（只有设置 `OPENAI_API_KEY` 后才会发起付费请求）：
+
+```powershell
+$env:OPENAI_API_KEY = '<通过安全方式设置，勿写入脚本或提交>'
+D:\anaconda3\python.exe code\run_baseline_predictions.py `
+  --mode raw_native_cases --lang zh --split dev --limit 20 `
+  --baseline whale_core_gpt4o_native_pilot `
+  --adapter-command "D:\anaconda3\python.exe E:\2026-1\whale-core\evals\timlmembench_native.py --answer-mode gpt4o --max-queries 20 --max-output-tokens 256" `
+  --output E:\2026-1\whale-core\results\tables\timlmembench_zh_gpt4o_pilot_predictions.jsonl
+```
+
+每题的官方 API `usage` 会写入预测 JSONL；上述 `--limit 20` 按官方排序取前
+20 题，不保证九维代表性。正式外推需另外做分层小样本。参见
+[`TIMLMEMBENCH_GPT4O_COST.md`](TIMLMEMBENCH_GPT4O_COST.md)。
 
 本机现有 memory/companion 测试中，42 项通过、5 项在创建/清理 Windows
 临时目录时因 `PermissionError` 中断；这是当前运行环境的限制，不能记作

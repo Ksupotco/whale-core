@@ -1,3 +1,6 @@
+import io
+import json
+
 from evals.timlmembench_native import NativeMemoryAdapter
 from whale_core.memory.store import MemoryKind
 
@@ -51,3 +54,31 @@ def test_reset_isolates_samples_and_rejects_mismatched_ids():
         assert "without reset" in str(exc)
     else:
         raise AssertionError("sample mismatch must fail")
+
+
+def test_gpt4o_mode_records_real_usage_and_enforces_query_cap(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only-key")
+    requests = []
+
+    def fake_open(request, timeout):
+        requests.append(json.loads(request.data))
+        return io.BytesIO(json.dumps({
+            "choices": [{"message": {"content": "证据不足。"}}],
+            "usage": {"prompt_tokens": 120, "completion_tokens": 8,
+                      "total_tokens": 128},
+        }).encode())
+
+    monkeypatch.setattr("evals.timlmembench_native.urllib.request.urlopen", fake_open)
+    adapter = NativeMemoryAdapter(answer_mode="gpt4o", max_queries=1)
+    adapter.handle({"request_type": "reset", "sample_id": "one"})
+    result = adapter.handle(_query("one"))
+    assert result["answer"] == "证据不足。"
+    assert result["usage"]["prompt_tokens"] == 120
+    assert requests[0]["model"] == "gpt-4o"
+    assert requests[0]["temperature"] == 0
+    try:
+        adapter.handle(_query("one"))
+    except ValueError as exc:
+        assert "query cap" in str(exc)
+    else:
+        raise AssertionError("GPT-4o query cap must fail closed")

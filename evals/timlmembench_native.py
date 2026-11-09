@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +24,7 @@ from whale_core.memory.continuity import remember_episode
 from whale_core.memory.curation import MemoryCurator
 from whale_core.memory.history import append_user_message
 from whale_core.memory.store import InMemoryStore, MemoryKind
+from whale_core.core.prompt_composer import compose_companion_system
 
 
 class ProbeModel:
@@ -36,15 +40,71 @@ class ProbeModel:
         return "<ABSTAIN>"
 
 
+class GPT4oModel(ProbeModel):
+    """Use the product's system-prompt composer and record API usage."""
+
+    def __init__(self, *, max_output_tokens: int = 256) -> None:
+        super().__init__()
+        self.api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        if not self.api_key:
+            raise ValueError("OPENAI_API_KEY is required for --answer-mode gpt4o")
+        if max_output_tokens < 1 or max_output_tokens > 1024:
+            raise ValueError("max_output_tokens must be between 1 and 1024")
+        self.max_output_tokens = max_output_tokens
+        self.last_usage: dict[str, Any] = {}
+
+    def reply(self, text: str, *, persona: str = "", memories=(), history=()) -> str:
+        self.memories = tuple(str(item) for item in memories)
+        self.history = tuple(history)
+        system = compose_companion_system(persona=persona, memories=self.memories)
+        messages = [{"role": "system", "content": system}]
+        messages.extend(
+            {"role": item["role"], "content": item["content"][:2000]}
+            for item in self.history[-12:]
+            if isinstance(item, dict) and item.get("role") in {"user", "assistant"}
+            and isinstance(item.get("content"), str)
+        )
+        messages.append({"role": "user", "content": text[:4000]})
+        body = json.dumps({
+            "model": "gpt-4o", "messages": messages,
+            "temperature": 0, "max_tokens": self.max_output_tokens,
+        }, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            "https://api.openai.com/v1/chat/completions",
+            data=body,
+            headers={"Authorization": f"Bearer {self.api_key}",
+                     "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                payload = json.load(response)
+        except urllib.error.HTTPError as exc:
+            # Never include response bodies or authorization headers in logs.
+            raise RuntimeError(f"GPT-4o HTTP {exc.code}") from exc
+        self.last_usage = dict(payload.get("usage") or {})
+        return str(payload["choices"][0]["message"]["content"] or "<ABSTAIN>")
+
+
 class NativeMemoryAdapter:
-    def __init__(self) -> None:
+    def __init__(self, *, answer_mode: str = "probe", max_queries: int = 0,
+                 max_output_tokens: int = 256) -> None:
+        if answer_mode not in {"probe", "gpt4o"}:
+            raise ValueError("unsupported answer_mode")
+        if answer_mode == "gpt4o" and max_queries < 1:
+            raise ValueError("--max-queries is required for GPT-4o runs")
+        self.answer_mode = answer_mode
+        self.max_queries = max_queries
+        self.max_output_tokens = max_output_tokens
+        self.query_count = 0
         self.reset("")
 
     def reset(self, sample_id: str) -> None:
         self.sample_id = sample_id
         self.store = InMemoryStore()
         self.curator = MemoryCurator(self.store)
-        self.model = ProbeModel()
+        self.model = (GPT4oModel(max_output_tokens=self.max_output_tokens)
+                      if self.answer_mode == "gpt4o" else ProbeModel())
         self.companion = WhaleCompanion(self.store, self.model, curator=self.curator)
         self.sessions = 0
         self.turns = 0
@@ -78,6 +138,9 @@ class NativeMemoryAdapter:
     def query(self, request: dict[str, Any]) -> dict[str, Any]:
         if request.get("mode") != "raw_native_cases":
             raise ValueError("this adapter supports raw_native_cases only")
+        if self.answer_mode == "gpt4o" and self.query_count >= self.max_queries:
+            raise ValueError("GPT-4o query cap reached")
+        self.query_count += 1
         query = str(request.get("query") or "")
         # A fresh query conversation gives no privileged access to source-session
         # history. This matches the cross-session memory question.
@@ -91,7 +154,8 @@ class NativeMemoryAdapter:
             "retrieved_texts": list(self.model.memories),
             "metadata": {
                 "adapter": "whale_core_structural_native_v1",
-                "answer_mode": "offline_abstain_probe",
+                "answer_mode": ("gpt-4o" if self.answer_mode == "gpt4o"
+                                else "offline_abstain_probe"),
                 "ingested_sessions": self.sessions,
                 "ingested_turns": self.turns,
                 "episode_count": len(episodes),
@@ -100,7 +164,8 @@ class NativeMemoryAdapter:
                 "history_messages_visible": len(self.model.history),
                 "scope_mode": "unpartitioned_legacy",
             },
-            "usage": {"model_calls": 0, "input_tokens": 0, "output_tokens": 0},
+            "usage": (self.model.last_usage if self.answer_mode == "gpt4o"
+                      else {"model_calls": 0, "input_tokens": 0, "output_tokens": 0}),
         }
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -125,8 +190,14 @@ class NativeMemoryAdapter:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--log", type=Path, help="Optional JSONL diagnostics path")
+    parser.add_argument("--answer-mode", choices=("probe", "gpt4o"), default="probe")
+    parser.add_argument("--max-queries", type=int, default=0,
+                        help="Required spending cap for GPT-4o runs; match runner --limit")
+    parser.add_argument("--max-output-tokens", type=int, default=256)
     args = parser.parse_args()
-    adapter = NativeMemoryAdapter()
+    adapter = NativeMemoryAdapter(answer_mode=args.answer_mode,
+                                  max_queries=args.max_queries,
+                                  max_output_tokens=args.max_output_tokens)
     log = args.log.open("w", encoding="utf-8") if args.log else None
     try:
         for line in sys.stdin:
