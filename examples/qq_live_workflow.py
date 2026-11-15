@@ -1847,7 +1847,7 @@ def cmd_run(args) -> int:
         if is_group and hasattr(send_port, "prime_group_at"):
             _at_name = ""
             _nd = globals().get("_name_directory_ref")
-            _sid = str(incoming.sender_id or incoming.account or "")
+            _sid = str(incoming.account or "")  # Incoming 只有 account(uin)，无 sender_id
             _suid = str(incoming.sender_uid or "")
             if _nd is not None and (_sid or _suid):
                 try:
