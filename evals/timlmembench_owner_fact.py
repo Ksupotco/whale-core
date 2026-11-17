@@ -17,13 +17,19 @@ from typing import Any
 import requests
 
 from whale_core.core.prompt_composer import compose_companion_system
+from whale_core.core.companion import WhaleCompanion
+from whale_core.life.conversation_context import (
+    ConversationKind, ConversationRef, Principal, ResolvedContext,
+)
 from whale_core.life.bounded_call import BoundedCall
+from whale_core.memory.curation import MemoryCurator
 from whale_core.memory.owner_fact_extraction import OwnerFactExtractor
 from whale_core.memory.owner_fact_worker import OwnerFactWorker
 from whale_core.memory.owner_facts import (
     MemoryAuthorization, OwnerFactService, UserEvidence,
 )
 from whale_core.memory.store import InMemoryStore
+from whale_core.memory.spaces import ensure_owner_working_copy
 
 
 MODEL = "deepseek-v4.1-flash-1017"
@@ -88,6 +94,22 @@ class ExtractionModel:
                                     max_tokens=512)
 
 
+class AnswerBrain:
+    def __init__(self, client: ChatClient):
+        self.client = client
+        self.memories: tuple[str, ...] = ()
+
+    def reply(self, text: str, *, persona: str = "", memories=(), history=(),
+              images=()) -> str:
+        self.memories = tuple(str(item) for item in memories)
+        prompt = compose_companion_system(persona=persona, memories=self.memories)
+        prompt += ("\n\n仅根据可见记忆回答问题。证据不足时回答‘证据不足’，"
+                   "不要编造，也不要把联系人发言当作 owner 自述。")
+        return self.client.complete(
+            [{"role": "system", "content": prompt},
+             {"role": "user", "content": text}], max_tokens=384)
+
+
 class BenchmarkAuthority:
     def __init__(self, owner_id: str):
         self.owner_id = owner_id
@@ -127,9 +149,20 @@ class OwnerFactAdapter:
             self.worker.stop(timeout=5)
         self.sample_id = sample_id
         self.store = InMemoryStore()
+        space = ensure_owner_working_copy(self.store, owner=sample_id)
         self.authority = BenchmarkAuthority(sample_id)
         self.service = OwnerFactService(self.store, self.authority)
         self.auth = self.authority.authorize_now(sample_id, SPACE)
+        self.context = ResolvedContext(
+            conversation=ConversationRef("qq", ConversationKind.QQ_PRIVATE,
+                                         "private:benchmark"),
+            principal=Principal(PRINCIPAL, True, True, "benchmark_mapping"),
+            persona_id=None, allowed_memory_spaces=(space,),
+        )
+        self.brain = AnswerBrain(self.client)
+        self.companion = WhaleCompanion(
+            self.store, self.brain, curator=MemoryCurator(self.store),
+            owner_facts=self.service, owner_fact_authority=self.authority)
         extractor = OwnerFactExtractor(ExtractionModel(self.client), timeout_s=25)
         self.worker = OwnerFactWorker.create(
             self.store, self.service, extractor,
@@ -173,19 +206,14 @@ class OwnerFactAdapter:
             raise RuntimeError("query limit reached")
         self.queries += 1
         query = str(request.get("query") or "")
-        facts = self.service.retrieve(self.auth, query, limit=8)
         accepted_total = len(self.service.retrieve(self.auth, "", limit=1000))
-        memories = [f"长期记忆（用户自述）：{fact.summary}" for fact in facts]
-        prompt = compose_companion_system(persona="", memories=memories)
-        prompt += ("\n\n仅根据可见记忆回答问题。证据不足时回答‘证据不足’，"
-                   "不要编造，也不要把联系人发言当作 owner 自述。")
         before = dict(self.client.usage)
-        answer = self.client.complete(
-            [{"role": "system", "content": prompt},
-             {"role": "user", "content": query}], max_tokens=384)
+        answer = self.companion.chat(query, episodic=False, context=self.context)
+        memories = self.brain.memories
+        facts = self.service.retrieve(self.auth, query, limit=24)
         return {
             "answer": answer, "retrieved_memory_ids": [f.fact_id for f in facts],
-            "retrieved_texts": memories,
+            "retrieved_texts": list(memories),
             "metadata": {
                 "adapter": "owner_fact_v1_product_pilot",
                 "owner_mapping": "benchmark user -> owner; private_chat only",
@@ -193,6 +221,7 @@ class OwnerFactAdapter:
                 "owner_turns": self.owner_turns,
                 "skipped_turns": self.skipped_turns,
                 "accepted_recall_count": len(facts),
+                "activated_memory_count": len(memories),
                 "accepted_total": accepted_total,
                 "model_calls_cumulative": self.client.calls,
                 "model_usage_cumulative": dict(self.client.usage),
