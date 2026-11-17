@@ -6,8 +6,8 @@ and validity checks. It adds task coverage, scoped boundaries, and a small
 context-aware reranker. It does not add contact transcript import, a cloud
 embedding provider, or a Cross-Encoder.
 
-Local owner-fact, worker, host integration, companion, and activation tests:
-**175 passed**.
+Local owner-fact, worker, host integration, companion, and activation tests
+re-run against upstream `74f7b36`: **195 passed**.
 The tests caught a regression where an explicit question such as “香菜的事还记得吗”
 lost the relevant curated fact; the branch now preserves a single distinctive
 term match for explicit recall requests.
@@ -25,7 +25,9 @@ answer model. The initial task/attribute reranker selected the exact set in
 **17/63 dev** and **18/82 holdout** cases. Narrower behavior-rule matching
 and an explicit meal-choice need raised this to **23/63 dev** and
 **23/82 holdout**, with forbidden selections in **12 dev** and **38 holdout**
-cases. This remains insufficient for an activation PR.
+cases. These figures were reproduced on the current branch. This remains
+insufficient for a merge-ready activation PR; the branch is submitted as a
+draft for code review and further correction.
 
 For a more comparable exploratory control,
 `evals/timlmembench_equal_pool_diagnostic.py` loads the same gold-current
