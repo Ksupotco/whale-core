@@ -27,6 +27,21 @@ associated with dev samples, **59/63** require at least one state attributed
 to the contact speaker; the holdout figure is **81/82**. These are coverage
 flags, not predicted errors or official benchmark scores.
 
+The next narrow product addition is `contact_fact_v1` in `memory/contact_facts.py`.
+It accepts an authenticated contact turn in an owner-owned working space,
+reuses the existing quote extractor and validation, and stores the speaker ID,
+source span, current status and correction link separately from owner facts.
+The companion retrieves it only in an authorized owner context and labels it
+as a contact utterance before activation. The benchmark bridge maps private
+contact turns into this service; it still skips other surfaces. This is a
+transcript-import capability, not a claim that the live QQ integration can
+observe private chats between two other people.
+
+The contact pilot now has a [separate report](../evals/TIMLMEMBENCH_OWNER_CONTACT_PILOT_2026-11-17.md):
+the fixed first five dev activation questions scored **5/5**, while five
+different holdout questions scored **0/5**. The holdout failures show stale
+composite permissions and missing activation for current situational rules.
+
 ## Checks
 
 - Relevant owner-fact, retrieval, embedding, correction, forgetting, and group

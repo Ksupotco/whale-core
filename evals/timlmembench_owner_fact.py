@@ -1,9 +1,9 @@
-"""TimlMemBench JSONL adapter using whale-core's actual owner_fact_v1 pipeline.
+"""TimlMemBench JSONL adapter using Whale's owner and contact fact pipelines.
 
 The benchmark's ``user`` speaker is treated as the owner of one private QQ
-space. Contact turns and non-private sessions are outside owner_fact_v1's
-automatic collection scope. Gold labels are never used during ingestion or
-answering. This adapter does not change product extraction or governance.
+space. Contact turns use the separate contact_fact_v1 writer. Non-private
+sessions remain outside this pilot. Gold labels are never used during
+ingestion or answering.
 """
 from __future__ import annotations
 
@@ -23,6 +23,9 @@ from whale_core.life.conversation_context import (
 )
 from whale_core.life.bounded_call import BoundedCall
 from whale_core.memory.curation import MemoryCurator
+from whale_core.memory.contact_facts import (
+    CONTACT_PROMPT_TEMPLATE, ContactEvidence, ContactFactService,
+)
 from whale_core.memory.owner_fact_extraction import OwnerFactExtractor
 from whale_core.memory.owner_fact_worker import OwnerFactWorker
 from whale_core.memory.owner_facts import (
@@ -160,10 +163,16 @@ class OwnerFactAdapter:
             persona_id=None, allowed_memory_spaces=(space,),
         )
         self.brain = AnswerBrain(self.client)
+        extractor = OwnerFactExtractor(ExtractionModel(self.client), timeout_s=25)
+        contact_extractor = OwnerFactExtractor(
+            ExtractionModel(self.client), timeout_s=25,
+            prompt_template=CONTACT_PROMPT_TEMPLATE)
+        self.contact_service = ContactFactService(self.store, self.authority,
+                                                  contact_extractor)
         self.companion = WhaleCompanion(
             self.store, self.brain, curator=MemoryCurator(self.store),
-            owner_facts=self.service, owner_fact_authority=self.authority)
-        extractor = OwnerFactExtractor(ExtractionModel(self.client), timeout_s=25)
+            owner_facts=self.service, owner_fact_authority=self.authority,
+            contact_facts=self.contact_service)
         self.worker = OwnerFactWorker.create(
             self.store, self.service, extractor,
             call_gate=BoundedCall(extractor.extract, default_timeout_s=30),
@@ -173,11 +182,13 @@ class OwnerFactAdapter:
         self.queries = 0
         self.sessions = 0
         self.owner_turns = 0
+        self.contact_turns = 0
+        self.contact_facts_accepted = 0
         self.skipped_turns = 0
         self.owner_speaker_id = ""
         self.ingested_turn_ids: list[str] = []
         self.skipped_turn_ids: dict[str, list[str]] = {
-            "unsupported_surface": [], "contact_without_product_writer": [],
+            "unsupported_surface": [], "unknown_speaker_role": [],
             "owner_identity_conflict": [],
         }
 
@@ -191,8 +202,28 @@ class OwnerFactAdapter:
                 self._skip(turn, "unsupported_surface")
             return
         for turn in session.get("turns") or ():
+            if turn.get("speaker_role") == "contact":
+                speaker_id = str(turn.get("speaker_id") or "")
+                if not speaker_id:
+                    self._skip(turn, "unknown_speaker_role")
+                    continue
+                evidence = ContactEvidence(
+                    owner_id=self.sample_id, space_id=SPACE,
+                    principal_id=PRINCIPAL, contact_id=speaker_id,
+                    evidence_id=str(turn.get("turn_id") or ""),
+                    conversation_id=str(session.get("session_id") or ""),
+                    text=str(turn.get("text") or ""),
+                    received_at=_timestamp(turn.get("timestamp")),
+                )
+                if not self.worker.drain(timeout=600):
+                    raise RuntimeError("owner fact extraction did not drain")
+                self.contact_facts_accepted += self.contact_service.observe(
+                    evidence, self.auth)
+                self.contact_turns += 1
+                self.ingested_turn_ids.append(evidence.evidence_id)
+                continue
             if turn.get("speaker_role") != "user":
-                self._skip(turn, "contact_without_product_writer")
+                self._skip(turn, "unknown_speaker_role")
                 continue
             speaker_id = str(turn.get("speaker_id") or "")
             if self.owner_speaker_id and speaker_id != self.owner_speaker_id:
@@ -229,8 +260,19 @@ class OwnerFactAdapter:
         answer = self.companion.chat(query, episodic=False, context=self.context)
         memories = self.brain.memories
         facts = self.service.retrieve(self.auth, query, limit=24)
+        contact_hits = self.contact_service.retrieve_hits(self.auth, query, limit=24)
+        contact_states = [
+            {"id": record.record_id,
+             "subject_id": record.content["contact_id"],
+             "summary": record.content["summary"],
+             "status": record.content["status"],
+             "evidence_id": record.content["evidence_id"]}
+            for record in self.contact_service.list_states(self.auth)
+        ]
         return {
-            "answer": answer, "retrieved_memory_ids": [f.fact_id for f in facts],
+            "answer": answer,
+            "retrieved_memory_ids": ([f.fact_id for f in facts]
+                                     + [h.record.record_id for h in contact_hits]),
             "retrieved_texts": list(memories),
             "metadata": {
                 "adapter": "owner_fact_v1_product_pilot",
@@ -238,11 +280,15 @@ class OwnerFactAdapter:
                 "owner_speaker_id": self.owner_speaker_id,
                 "ingested_turn_ids": list(self.ingested_turn_ids),
                 "skipped_turn_ids_by_reason": self.skipped_turn_ids,
-                "contact_writer": "unavailable",
+                "contact_writer": "contact_fact_v1_private_chat",
                 "ingested_sessions": self.sessions,
                 "owner_turns": self.owner_turns,
+                "contact_turns": self.contact_turns,
+                "contact_facts_accepted": self.contact_facts_accepted,
+                "contact_fact_states": contact_states,
                 "skipped_turns": self.skipped_turns,
-                "accepted_recall_count": len(facts),
+                "accepted_recall_count": len(facts) + len(contact_hits),
+                "contact_recall_count": len(contact_hits),
                 "activated_memory_count": len(memories),
                 "accepted_total": accepted_total,
                 "model_calls_cumulative": self.client.calls,

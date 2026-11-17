@@ -154,6 +154,7 @@ class OwnerFactExtractor:
         max_summary_chars: int = MAX_SUMMARY_CHARS,
         max_existing: int = MAX_EXISTING_FACTS,
         timeout_s: float = 10.0,
+        prompt_template: str = _PROMPT_TEMPLATE,
     ) -> None:
         self._model = model
         self._max_candidates = max(1, int(max_candidates))
@@ -161,6 +162,7 @@ class OwnerFactExtractor:
         self._max_summary = max(1, int(max_summary_chars))
         self._max_existing = max(0, int(max_existing))
         self._timeout = float(timeout_s)
+        self._prompt_template = prompt_template
 
     def extract(
         self,
@@ -180,7 +182,7 @@ class OwnerFactExtractor:
             for f in list(bounded_existing_facts)[: self._max_existing]
             if f.status == FactStatus.ACCEPTED
         ]
-        prompt = _PROMPT_TEMPLATE.format(
+        prompt = self._prompt_template.format(
             max_candidates=self._max_candidates,
             observed_at=evidence.received_at.astimezone(timezone.utc).isoformat(),
             tz=evidence.timezone or "未知",
@@ -225,8 +227,13 @@ def _build_candidate(item: Mapping[str, Any], evidence: UserEvidence) -> FactCan
         return None
     start = evidence.text.index(quote)
     end = start + len(quote)
+    kind_raw = str(item.get("kind") or "fact")
+    # A rule is still a fact about the speaker's stated boundary. The product
+    # role classifier handles its use at retrieval time.
+    kind_raw = {"constraint": "fact", "boundary": "fact", "rule": "fact",
+                "禁止事项": "fact", "行为约束": "fact", "规则": "fact"}.get(kind_raw, kind_raw)
     try:
-        kind = FactKind(str(item.get("kind") or "fact"))
+        kind = FactKind(kind_raw)
     except ValueError:
         return None
     valid_from = _parse_aware(item.get("valid_from"))
@@ -282,6 +289,10 @@ def validate_candidate(
     cand: FactCandidate,
     evidence: UserEvidence,
     allowed_correction_targets: Mapping[str, int],
+    *,
+    allow_implicit_subject: bool = False,
+    allow_conditional_instruction: bool = False,
+    allow_reported_subject: bool = False,
 ) -> tuple[str, str]:
     """服务端唯一裁决点。``allowed_correction_targets``: 本轮展示给模型的
     fact_id → revision 快照（≤8 条）；模型不得引用快照之外的任何 ID。
@@ -346,7 +357,9 @@ def validate_candidate(
     # 主体：quote 本身必须是第一人称自述（句子含"我"≠ quote 是 owner 自述；
     # "我问过她喜欢咖啡"中的"她喜欢咖啡"不得升级为 owner 事实）。
     # 唯一例外：上述定向更正。
-    if not any(p in cand.quote for p in _FIRST_PERSON) and not correction_exception:
+    if (not allow_implicit_subject
+            and not any(p in cand.quote for p in _FIRST_PERSON)
+            and not correction_exception):
         return ("reject", "no_first_person")
 
     # predicate/value 必须有证据支撑；格式非法/值不在 quote 中 → 拒
@@ -374,6 +387,7 @@ def validate_candidate(
     if (
         any(m in cand.quote for m in _THIRD_PARTY_MARKERS)
         and not correction_exception
+        and not allow_reported_subject
     ):
         if cand.predicate is not None or cand.value is not None:
             return ("reject", "predicate_subject_mismatch")
@@ -396,9 +410,13 @@ def validate_candidate(
 
     # 假设句：同句 + 跨行框架前缀窗口（"假设如下：\n我住在北京"）
     lookback = evidence.text[max(0, sentence_start - _FRAME_LOOKBACK_CHARS) : sentence_start]
-    if any(w in sentence for w in _HYPOTHETICAL_WORDS) or any(
-        w in lookback for w in _HYPOTHETICAL_WORDS
-    ):
+    conditional_instruction = (allow_conditional_instruction
+                               and any(w in sentence for w in ("如果", "要是"))
+                               and any(w in sentence for w in ("就", "不要", "别", "应")))
+    if (not conditional_instruction
+            and (any(w in sentence for w in _HYPOTHETICAL_WORDS) or any(
+                w in lookback for w in _HYPOTHETICAL_WORDS
+            ))):
         return ("pending", "hypothetical")
     if any(w in sentence for w in _UNCERTAIN_WORDS):
         return ("pending", "uncertain")

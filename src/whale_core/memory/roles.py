@@ -27,7 +27,7 @@ def memory_role(summary: str) -> str:
                ("不希望", "不想", "不要", "不应", "不能", "不得", "不打算", "别", "只允许", "先问", "需同意", "未经"))
     if audience and rule:
         return "boundary"
-    if (any(word in text for word in ("进门", "开门", "门锁", "门码", "钥匙", "密码"))
+    if (any(word in text for word in ("进门", "开门", "门锁", "门码", "旧码", "钥匙", "密码"))
             and any(word in text for word in
                     ("可以", "允许", "不应", "不能", "不得", "不要", "不再", "停用", "作废", "先问", "需同意"))):
         return "access_permission"
@@ -63,7 +63,7 @@ def access_relevance(summary: str, query: str) -> int:
             and not any(word in question for word in ("漏水", "冒烟", "着火", "水声"))):
         return 0
     if not any(word in text for word in
-               ("进门", "开门", "门锁", "门码", "钥匙", "密码")):
+               ("进门", "开门", "门锁", "门码", "旧码", "钥匙", "密码")):
         return 0
     return 1 + int(bool(_bigrams(text) & _bigrams(question)))
 

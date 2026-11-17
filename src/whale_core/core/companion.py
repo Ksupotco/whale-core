@@ -127,13 +127,14 @@ def _maybe_writeback_inner_state(store: MemoryStore, *, conversation_id: str,
 class WhaleCompanion:
     def __init__(self, store: MemoryStore, model: TextCompanion, *, curator: MemoryCurator | None = None,
                  timeline=None, self_uid: str = "", exploration_delivery=None,
-                 owner_facts=None, owner_fact_authority=None):
+                 owner_facts=None, owner_fact_authority=None, contact_facts=None):
         self.store, self.model, self.curator = store, model, curator
         # owner_fact_v1（首批缩界）：领域服务 + 授权现状提供者（宿主装配注入；
         # 两者齐备且本轮 context 可信 owner 私聊/眼镜时才召回注入与写回守卫生效）。
         # 服务/授权任一缺失 = 功能未装配，行为与旧版完全一致。
         self.owner_facts = owner_facts
         self.owner_fact_authority = owner_fact_authority
+        self.contact_facts = contact_facts
         # G1：群时间线（GroupTimelineStore）；群会话的历史从它渲染（带归属），
         # 不再用无身份的历史回放。
         self.timeline = timeline
@@ -158,7 +159,8 @@ class WhaleCompanion:
           永不出现）；渲染带「用户自述」归属标注，防模型误认自身偏好；
         - 任何故障 fail soft，不阻塞聊天。
         """
-        if self.owner_facts is None or self.owner_fact_authority is None:
+        if ((self.owner_facts is None and self.contact_facts is None)
+                or self.owner_fact_authority is None):
             return []  # 未装配：行为与旧版一致
         if context is None:
             return []
@@ -192,15 +194,26 @@ class WhaleCompanion:
             if auth is None:
                 return []  # 实时授权不成立（pause/解绑/注销）：不召回
             from whale_core.memory.activation import MemoryCandidate
-            facts = self.owner_facts.retrieve_hits(auth, str(query or ""), limit=24)
             out: list = []
-            for hit in facts or ():
-                fact = hit.fact
-                summary = str(getattr(fact, "summary", "") or "").strip()
-                if summary:
-                    out.append(MemoryCandidate(
-                        key=f"owner_fact:{fact.fact_id}", summary=summary,
-                        score=hit.score, source="owner_fact"))
+            if self.owner_facts is not None:
+                for hit in self.owner_facts.retrieve_hits(
+                        auth, str(query or ""), limit=24):
+                    fact = hit.fact
+                    summary = str(getattr(fact, "summary", "") or "").strip()
+                    if summary:
+                        out.append(MemoryCandidate(
+                            key=f"owner_fact:{fact.fact_id}", summary=summary,
+                            score=hit.score, source="owner_fact"))
+            if self.contact_facts is not None:
+                for hit in self.contact_facts.retrieve_hits(
+                        auth, str(query or ""), limit=24):
+                    record = hit.record
+                    subject = str(record.content.get("contact_id") or "")
+                    summary = str(record.content.get("summary") or "").strip()
+                    if subject and summary:
+                        out.append(MemoryCandidate(
+                            key=record.key, summary=summary, score=hit.score,
+                            source="contact_fact", subject_id=subject))
             return out
         except Exception:
             import logging
@@ -384,6 +397,8 @@ class WhaleCompanion:
                         continue
                     owner_used += 1
                     piece = f"长期记忆（用户自述）：{item.summary}"
+                elif item.source == "contact_fact":
+                    piece = f"长期记忆（联系人{item.subject_id}发言）：{item.summary}"
                 else:
                     piece = item.summary
                 norm = _norm_mem(item.summary)
@@ -449,12 +464,16 @@ class WhaleCompanion:
         else:
             # Legacy chat-only behavior kept for backwards compatibility; opt in
             # to curated retrieval to avoid injecting raw transcripts by default.
-            memories = [f"长期记忆（用户自述）：{row.candidate.summary}"
-                        for row in activate(original, rerank(original, candidates),
-                                            limit=OWNER_FACT_INJECT_LIMIT)] + [
+            memories = [
+                (f"长期记忆（联系人{row.candidate.subject_id}发言）：{row.candidate.summary}"
+                 if row.candidate.source == "contact_fact" else
+                 f"长期记忆（用户自述）：{row.candidate.summary}")
+                for row in activate(original, rerank(original, candidates),
+                                    limit=OWNER_FACT_INJECT_LIMIT)] + [
                 m for m in (
                     _injectable_memory(str(r.content.get("summary", "")))
-                    for r in ctx.recent_episodes)
+                    for r in ctx.recent_episodes
+                    if "contact_fact_v1" not in r.tags)
                 if m]
 
         if exploration_owner and conversation_id:
