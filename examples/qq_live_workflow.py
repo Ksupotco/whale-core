@@ -759,6 +759,11 @@ def cmd_run(args) -> int:
         artifact_dir=Path(args.store).parent / "artifacts")
     for note in cap.notes:
         print(f"[能力] {note}")
+    # QQ uses the same optional embedding provider as the service profile.
+    # Without one, DynamicHybridCurator falls back to the existing BM25 reader.
+    from whale_core.memory.semantic import DynamicHybridCurator
+    workflow.companion.curator = DynamicHybridCurator(
+        store, plugin_registry, base=workflow._curator)
     # Shell ACL：主人 personal 沙箱；QQ 非主人默认拒，sudo 租约可短暂放行
     shell_auto_actions: frozenset[str] = frozenset()
     if os.environ.get("WHALE_SHELL_ENABLED", "").strip() == "1":

@@ -21,7 +21,7 @@ def plan_query(query: str, *, group: bool = False) -> TaskPlan:
             needs.append(name)
 
     add("access", any(w in text for w in
-        ("进门", "开门", "进去", "进屋", "入内", "门码", "入口码", "院门码", "钥匙", "门锁")))
+        ("进门", "开门", "进去", "进屋", "入内", "旧码", "门码", "入口码", "院门码", "钥匙", "门锁")))
     add("delivery", any(w in text for w in
         ("冷藏件", "包裹", "快递", "送汤", "放过去", "送过去", "签收", "柜机")))
     add("medicine", any(w in text for w in ("药片", "猫药", "用药")))

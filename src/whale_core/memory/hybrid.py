@@ -1,21 +1,20 @@
-"""混合记忆检索（PR-14）：词项 + 嵌入融合召回。
+"""混合记忆检索：BM25 与可选嵌入按名次融合。
 
 候选集与打分口径继承 MemoryCurator（EPISODE+PREFERENCE 且 tags 含 "curated"），
 在此基础上叠加可选的向量相似度：
 
-    score = confidence * (alpha * lexical
-                          + (1 - alpha) * embedding
-                          + 0.15 * importance
-                          + 0.10 * freshness)
+    fused = 61 * (alpha / (60 + bm25_rank)
+                  + (1 - alpha) / (60 + embedding_rank))
+    score = confidence * (0.65 * fused + 0.25 * importance + 0.10 * freshness)
 
-- lexical   = 查询词项交集占比（与 curation 的 relevance 完全一致）
+- lexical   = MemoryCurator 使用的归一化 BM25
 - embedding = cosine(query 向量, summary 向量)；无 embedder 或嵌入失败时为 0.0
 - freshness = 稳定事实 1.0；否则 0.5 ** (age_days / half_life_days)
 
 防噪门槛：非空查询下，词项零交集且 embedding < 0.3 的记录不入选，
 避免纯向量召回把无关记忆带进上下文。空查询只放 stable 事实（与 curator 一致）。
 
-embedder=None 时整体退化为纯词项召回（候选集与 MemoryCurator 一致）；
+embedder=None 时整体退化为 BM25 召回（候选集与 MemoryCurator 一致）；
 embedder 抛异常时本次召回自动退化为纯词项，不向上抛错。
 """
 from __future__ import annotations
@@ -26,7 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol, Sequence
 
-from whale_core.memory.curation import _is_expired, _terms, _space_ids
+from whale_core.memory.curation import _bm25_scores, _is_expired, _terms, _space_ids
 from whale_core.memory.store import MemoryKind, MemoryRecord, MemoryStore
 
 #: 词项零交集时，向量分至少达到该阈值才允许入选（防纯向量噪声）。
@@ -100,11 +99,8 @@ class HybridHit:
 
 
 class HybridCurator:
-    """词项 + 嵌入融合召回。embedder=None 时退化为纯词项（与 MemoryCurator 一致口径）。
+    """BM25 + 嵌入名次融合；无嵌入时保持 MemoryCurator 的 BM25 口径。
 
-    融合公式（docstring 冻结）：
-        score = confidence * (alpha*lexical + (1-alpha)*embedding
-                              + 0.15*importance + 0.10*freshness)
     非空查询：词项零交集且 embedding < 0.3 不入选；空查询只放 stable 事实。
     """
 
@@ -137,6 +133,7 @@ class HybridCurator:
         candidates = [r for r in records if "curated" in r.tags
                       and "superseded" not in r.tags
                       and not _is_expired(r.content, current)]
+        bm25 = _bm25_scores(query, candidates)
 
         # 按空间分组嵌入：缓存键含 space_id，任何空间拿不到其他空间的
         # 缓存向量；任何异常 → 该空间候选退化纯词项，不影响其他空间。
@@ -161,35 +158,52 @@ class HybridCurator:
                 except Exception:
                     degraded_spaces.add(sid)
 
+        embedding_scores = {}
+        for idx, rec in enumerate(candidates):
+            pair = vecs_by_key.get(rec_key(candidates, idx))
+            embedding_scores[rec.key] = (cosine(pair[0], pair[1])
+                                         if pair is not None and pair[0] is not None
+                                         and pair[1] is not None else 0.0)
+        lexical_rank = {key: rank for rank, (key, _) in enumerate(
+            sorted(((key, value) for key, value in bm25.items() if value > 0),
+                   key=lambda row: row[1], reverse=True), 1)}
+        semantic_rank = {key: rank for rank, (key, _) in enumerate(
+            sorted(((key, value) for key, value in embedding_scores.items()
+                    if value >= EMBEDDING_FLOOR),
+                   key=lambda row: row[1], reverse=True), 1)}
         matches: list[HybridHit] = []
         for idx, rec in enumerate(candidates):
             content = rec.content
             stable = bool(content.get("stable_fact"))
             terms = _terms(str(content.get("summary", "")))
             common = terms & query_terms
-            pair = vecs_by_key.get(rec_key(candidates, idx))
-            embedding = (cosine(pair[0], pair[1])
-                         if pair is not None and pair[0] is not None
-                         and pair[1] is not None else 0.0)
+            embedding = embedding_scores[rec.key]
             if query_terms:
                 if not common and embedding < EMBEDDING_FLOOR:
                     continue
             elif not stable:
                 continue
-            lexical = len(common) / max(1, len(query_terms))
+            lexical = bm25.get(rec.key, 0.0)
             age = max(0.0, (current - rec.created_at).total_seconds() / 86400)
             freshness = 1.0 if stable else math.pow(0.5, age / self.half_life_days)
             importance = float(content.get("importance", 0.5))
             confidence = float(content.get("confidence", 1.0))
-            score = confidence * (self.alpha * lexical
-                                  + (1 - self.alpha) * embedding
-                                  + 0.15 * importance
+            lexical_rrf = (1.0 / (60 + lexical_rank[rec.key])
+                           if rec.key in lexical_rank else 0.0)
+            semantic_rrf = (1.0 / (60 + semantic_rank[rec.key])
+                            if rec.key in semantic_rank else 0.0)
+            fused = (((self.alpha * lexical_rrf +
+                       (1 - self.alpha) * semantic_rrf) * 61)
+                     if semantic_rank else lexical)
+            score = confidence * (0.65 * fused + 0.25 * importance
                                   + 0.10 * freshness)
             channel = []
             if common:
                 channel.append(f"词项匹配({len(common)}项)")
             if embedding >= EMBEDDING_FLOOR:
                 channel.append(f"嵌入相似{embedding:.2f}")
+            if semantic_rank and (lexical_rrf or semantic_rrf):
+                channel.append("RRF名次融合")
             if stable:
                 channel.append("稳定事实")
             reasons = tuple(channel) + (

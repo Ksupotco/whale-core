@@ -37,5 +37,8 @@ def test_owner_fact_bridge_ignores_contact_and_retrieves_committed_fact():
         assert result["retrieved_texts"] == ["长期记忆（用户自述）：我养的猫叫年糕"]
         assert result["metadata"]["accepted_total"] == 1
         assert result["metadata"]["skipped_turns"] == 1
+        hits = adapter.service.retrieve_hits(adapter.auth, "我的猫叫什么")
+        assert len(hits) == 1 and hits[0].score > 0
+        assert hits[0].fact.summary == "我养的猫叫年糕"
     finally:
         adapter.worker.stop(timeout=5)

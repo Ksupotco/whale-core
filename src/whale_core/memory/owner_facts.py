@@ -248,6 +248,14 @@ class FactRecord:
 
 
 @dataclass(frozen=True)
+class FactRecallHit:
+    """A verified current owner fact with its query relevance intact."""
+
+    fact: FactRecord
+    score: float
+
+
+@dataclass(frozen=True)
 class ObserveResult:
     status: ObserveStatus
     evidence_id: str
@@ -1108,6 +1116,16 @@ class OwnerFactService:
         *,
         limit: int = 8,
     ) -> tuple[FactRecord, ...]:
+        return tuple(hit.fact for hit in self.retrieve_hits(
+            authorization, query, limit=limit))
+
+    def retrieve_hits(
+        self,
+        authorization: MemoryAuthorization,
+        query: str,
+        *,
+        limit: int = 8,
+    ) -> tuple[FactRecallHit, ...]:
         """读侧 fail-closed：逐 space 现查授权、复核归属、源证据墓碑 fence。
 
         非空查询要求词项重叠 >0（不相关不召回）；空查询返回最近 accepted
@@ -1160,7 +1178,8 @@ class OwnerFactService:
                     score = (len(common) + 0.5 * len(anchor_common)) / len(query_terms)
                 out.append((score, fact))
         out.sort(key=lambda item: (item[0], item[1].observed_at), reverse=True)
-        return tuple(f for _, f in out[: max(0, int(limit))])
+        return tuple(FactRecallHit(fact, score)
+                     for score, fact in out[: max(0, int(limit))])
 
     def _chain_anchor_terms(self, fact: FactRecord) -> set[str]:
         """沿 supersedes 链收集旧版本 summary 的词项（只读检索锚）。

@@ -192,14 +192,15 @@ class WhaleCompanion:
             if auth is None:
                 return []  # 实时授权不成立（pause/解绑/注销）：不召回
             from whale_core.memory.activation import MemoryCandidate
-            facts = self.owner_facts.retrieve(auth, str(query or ""), limit=24)
+            facts = self.owner_facts.retrieve_hits(auth, str(query or ""), limit=24)
             out: list = []
-            for rank, fact in enumerate(facts or (), 1):
+            for hit in facts or ():
+                fact = hit.fact
                 summary = str(getattr(fact, "summary", "") or "").strip()
                 if summary:
                     out.append(MemoryCandidate(
                         key=f"owner_fact:{fact.fact_id}", summary=summary,
-                        score=1.0 / rank, source="owner_fact"))
+                        score=hit.score, source="owner_fact"))
             return out
         except Exception:
             import logging
@@ -356,6 +357,7 @@ class WhaleCompanion:
         # Both sources have completed their own authorization and state checks
         # before the pure activation stage sees any candidate.
         from whale_core.memory.activation import MemoryCandidate, activate
+        from whale_core.memory.rerank import rerank
         candidates = self._owner_fact_candidates(
             original, context, spaces, conversation_id)
 
@@ -374,7 +376,7 @@ class WhaleCompanion:
             seen_norm = set()
             owner_used = 0
             for selected in activate(
-                    original, candidates, limit=12,
+                    original, rerank(original, candidates), limit=12,
                     is_group=str(conversation_id).startswith("group:")):
                 item = selected.candidate
                 if item.source == "owner_fact":
@@ -448,7 +450,7 @@ class WhaleCompanion:
             # Legacy chat-only behavior kept for backwards compatibility; opt in
             # to curated retrieval to avoid injecting raw transcripts by default.
             memories = [f"长期记忆（用户自述）：{row.candidate.summary}"
-                        for row in activate(original, candidates,
+                        for row in activate(original, rerank(original, candidates),
                                             limit=OWNER_FACT_INJECT_LIMIT)] + [
                 m for m in (
                     _injectable_memory(str(r.content.get("summary", "")))

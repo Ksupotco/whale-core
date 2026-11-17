@@ -16,22 +16,22 @@ _TOPICS = {
     "identity": ("称呼", "名字", "真名", "昵称", "叫我", "叫A", "被叫", "可以叫", "叫什么"),
     "family": ("家里", "家庭", "父母", "家人"),
 }
-_GENERIC_BIGRAMS = {"群里", "公开", "回复", "别人", "朋友", "现在", "最近", "应该", "可以", "不要", "不想"}
+_GENERIC_BIGRAMS = {"群里", "公开", "回复", "别人", "朋友", "现在", "最近", "应该", "可以", "不要", "不想", "我的", "你的", "他的", "什么"}
 
 
 def memory_role(summary: str) -> str:
     text = str(summary or "")
     audience = any(word in text for word in
-                   ("群里", "群聊", "公开", "对外", "转述", "透露", "分享", "汇报", "替", "告诉别人"))
+                   ("群里", "群聊", "公开", "对外", "转述", "透露", "分享", "汇报", "告诉别人"))
     rule = any(word in text for word in
-               ("不希望", "不想", "不要", "不能", "不得", "不打算", "别", "只允许", "先问", "需同意", "未经"))
+               ("不希望", "不想", "不要", "不应", "不能", "不得", "不打算", "别", "只允许", "先问", "需同意", "未经"))
     if audience and rule:
         return "boundary"
     if (any(word in text for word in ("进门", "开门", "门锁", "门码", "钥匙", "密码"))
             and any(word in text for word in
-                    ("可以", "允许", "不能", "不得", "不再", "停用", "作废", "先问", "需同意"))):
+                    ("可以", "允许", "不应", "不能", "不得", "不要", "不再", "停用", "作废", "先问", "需同意"))):
         return "access_permission"
-    if any(word in text for word in ("不能", "不得", "不要", "不用", "必须", "应先", "先问")):
+    if any(word in text for word in ("不能", "不得", "不要", "不应", "不用", "必须", "应先", "先问")):
         return "constraint"
     if (any(word in text for word in ("只会", "只有"))
             and any(word in text for word in ("提", "问", "回复", "接话", "聊"))):
@@ -53,12 +53,15 @@ def access_relevance(summary: str, query: str) -> int:
     """Check entry rules for entry questions and explicitly assigned home care."""
     question = str(query or "")
     explicit = any(word in question for word in
-               ("进门", "开门", "入内", "进屋", "门锁", "门码", "入口码", "一次性码", "钥匙", "密码"))
+               ("进门", "开门", "入内", "进屋", "旧码", "门锁", "门码", "入口码", "一次性码", "钥匙", "密码"))
     assigned_care = (any(word in question for word in ("明确让", "明确请求", "请B", "请 B"))
                      and any(word in question for word in ("帮忙喂", "照看", "看猫")))
     if not (explicit or assigned_care):
         return 0
     text = str(summary or "")
+    if (any(word in text for word in ("漏水", "冒烟", "着火", "水声"))
+            and not any(word in question for word in ("漏水", "冒烟", "着火", "水声"))):
+        return 0
     if not any(word in text for word in
                ("进门", "开门", "门锁", "门码", "钥匙", "密码")):
         return 0
@@ -73,8 +76,7 @@ def constraint_relevance(summary: str, query: str) -> int:
     if primary and not (matched & primary):
         return 0
     overlap = _bigrams(str(summary or "")) & _bigrams(str(query or ""))
-    topics = _topics(str(summary or "")) & _topics(str(query or ""))
-    if not (overlap or topics):
+    if not overlap:
         return 0
     score = 1 + len(overlap)
     # Match the requested pet action, not merely the same animal's name.
@@ -98,6 +100,10 @@ def task_topics(query: str) -> set[str]:
 def _bigrams(text: str) -> set[str]:
     return {part[i:i + 2] for part in re.findall(r"[\u4e00-\u9fff]+", text)
             for i in range(len(part) - 1)} - _GENERIC_BIGRAMS
+
+
+def lexical_overlap(left: str, right: str) -> int:
+    return len(_bigrams(left) & _bigrams(right))
 
 
 def boundary_relevance(summary: str, query: str, *, subject_id: str,

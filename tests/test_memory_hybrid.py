@@ -145,6 +145,23 @@ def test_fake_embedder_recalls_semantic_match_missed_by_lexical():
     assert hit.lexical_score == 0.0
     assert hit.embedding_score == pytest.approx(1.0)
     assert any("嵌入" in r for r in hit.reasons)
+    assert any("RRF" in r for r in hit.reasons)
+
+
+def test_rrf_only_fuses_authorized_space_candidates():
+    store = InMemoryStore()
+    curator = MemoryCurator(store)
+    own = curator.remember("我喜欢火锅", source="chat", evidence_id="own",
+                           consent=True, space_id="owner")
+    other = curator.remember("我喜欢火锅", source="chat", evidence_id="other",
+                             consent=True, space_id="group:other")
+    embedder = FakeEmbedder({"火锅": [1.0] + [0.0] * 7,
+                             "我喜欢火锅": [1.0] + [0.0] * 7})
+    hits = HybridCurator(store, embedder=embedder).recall(
+        "火锅", allowed_spaces=("owner",))
+    assert [hit.record.key for hit in hits] == [own.key]
+    assert other.key not in {hit.record.key for hit in hits}
+    assert "RRF名次融合" in hits[0].reasons
 
 
 def test_zero_overlap_low_embedding_excluded():
