@@ -48,3 +48,55 @@
 第20轮最终验证：完整Core Python **2665 passed /18 skipped /69 warnings**（231.77秒），Mobile纯JVM **125/125 /16个测试类**，协议 **72/72**，Python工具 **4 passed /1 skipped**，两仓 **68个契约文件一致**。前端未改，沿用第17轮网页96项、类型检查与构建结果；wheel在本轮源码上重新构建及源码外冒烟。Android组件、Robolectric、完整APK与真机未验证，纯JVM不代表这些项目通过。
 
 运行记录集中保存在本机工作区 `logs/12-V2分支初始化` 至 `logs/33-V2第20轮最终优化`；不将原始运行记录和私人配置提交到源码仓库。按用户最后追加要求完成第20轮，更新现有两个PR后停止。
+
+第21–25轮：[输出分页边界与完整性](21-25-output-boundaries.md)，后续分支 refactor/v2-output-hardening。
+
+第26轮：[宿主平台兼容与回归收尾](26-host-platform-regressions.md)。
+
+第27轮：[编码预算与来源截断](27-encoded-output-budget.md)，Core相关93项、Mobile纯JVM129项通过。
+
+第28轮：[完整输出链路整合](28-complete-output-pipeline.md)，读取总时限/分页预算、手机共用文件访问、流式尾部、真实Kotlin→Python观察解析。
+
+第29轮：[分板块深入优化](29-module-hardening.md)：后台调用与记忆任务、动作保留清理、HTTP/设备JSON输入；含后续板块优先级。
+
+第30轮：[记忆队列与关闭恢复](30-memory-worker-lifecycle.md)，保留普通stop，新增宿主quiesce；租约恢复、重复关闭与并发启动验证。
+
+第31轮：[动作存储分批清理与诊断](31-bounded-retention-scans.md)，前缀分页、事务安全的游标推进、后台限量与管理API状态。
+
+第32轮：[网页设备与后台诊断](32-runtime-diagnostics-console.md)，诊断数据到网页闭环、请求取消/超时/部分失败和陈旧状态。
+
+第33轮：[并发调用统计与诊断查询](33-provider-diagnostics-atomic.md)，事务累加、供应商前缀分页与非有限指标容错。
+
+第34轮：[控制台按需加载与页面恢复](34-console-deferred-pages.md)，11个页面拆包、加载/渲染失败隔离与重试、安装包分块资源校验。
+
+第35轮：[设备注册状态事务化](35-device-registry-transactions.md)，状态与审计一致提交、并发配对码唯一性、撤销/权限更新一致性。
+
+第36轮：[网页读取请求生命周期](36-console-read-lifecycle.md)，公共读取真实取消、超时恢复、卸载清理和9类API信号传递。
+
+第37轮：[共享有界流式读取](37-shared-stream-reader.md)，聊天/事件流解析收敛、单行上限、reader释放与取消隔离。
+
+第38轮：[活动与Trace查询隔离](38-events-query-isolation.md)，详情生命周期、局部重试与分页条件一致性。
+
+第39轮：[记忆查询身份隔离](39-memory-read-isolation.md)，主体/筛选/分页结果绑定、旧治理按钮隐藏、取消与恢复。
+
+第40轮：[静态资源错误语义](40-static-resource-errors.md)，缺失资源404、SPA深链保留及读取竞态处理。
+
+第41轮：[鉴权会话隔离](41-auth-session-version.md)，旧401隔离、取消请求隔离及聊天流统一请求。
+
+第42轮：[插件配置真实增量保存](42-plugin-config-patches.md)，未改字段/类型保护、特殊属性、重复字段与读取恢复。
+
+第43轮：[任务详情与时间线生命周期](43-task-detail-lifecycle.md)，读取取消、局部恢复、刷新和操作后的状态一致性。
+
+第44轮：[模型配置读取门槛](44-model-config-load-gate.md)，成功读取后编辑、失败恢复、角色/密钥草稿隔离。
+
+第45轮：[探索调度服务代次与取消](45-exploration-worker-generations.md)，服务切换隔离、tick去重、停止恢复与协作式取消检查。
+
+第46轮：[回复代码块完整性](46-reply-code-integrity.md)，同步最新QQ修复，统一围栏识别、代码内规划标记隔离及长度软裁保护。
+
+第47轮：[通知回执与按钮转交事务](47-notification-receipt-transactions.md)，迟到发送结果保护、按钮原子认领、撤回/出队及过期回滚。
+
+第48轮：[通知历史事务](48-notification-history-transactions.md)，并发添加/已读一致性、重复事件已读保留和容量校验。
+
+第49轮：[通知队列前缀分页与清理预算](49-notification-bounded-scans.md)，设备前缀查询、原子容量淘汰、分批游标推进与失败重试。
+
+第50轮：[聊天围栏起始识别收紧](50-chat-fence-opener.md)，波浪线 opener 只认物理行首（0–3 空格缩进），修复普通语气 `~~~` 误判吞掉分段/标记/净化/软裁的 PR#89 审查回归；反引号内联兼容保留。

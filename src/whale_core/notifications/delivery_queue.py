@@ -22,6 +22,9 @@ kv 键域（对齐 devices v1 的 kv 约定，值为 JSON 可序列化 dict）�
 """
 from __future__ import annotations
 
+import heapq
+import threading
+from collections import deque
 from typing import Any, Callable, Mapping
 
 from whale_core.devices.transports.base import now_ms
@@ -39,6 +42,8 @@ DELIVERY_PREFIX = "notify:delivery:"
 MAX_QUEUE_PER_DEVICE = 200
 #: 单趟清扫删除上限（有界清扫，对齐 v1 sweep_action_retention）
 SWEEP_MAX_DELETES = 500
+SWEEP_MAX_SCANNED = 500
+SCAN_PAGE_SIZE = 500
 #: delivery 台账保留期：终态后 7 天删除（对齐 v1 ACTION_RETENTION_MS）
 DELIVERY_RETENTION_MS = 7 * 24 * 3_600_000
 
@@ -52,17 +57,20 @@ def delivery_key(device_id: str, notification_id: str) -> str:
 
 
 class DeliveryQueue:
-    """待送达队列 + 送达台账。线程安全交给底层 store（InMemory/Sqlite 均有锁）。"""
+    """待送达队列 + 送达台账；复合状态更新走底层 store 原子事务。"""
 
     def __init__(self, store, *, max_per_device: int = MAX_QUEUE_PER_DEVICE,
                  now_fn: Callable[[], int] | None = None) -> None:
         if store is None:
             raise ValueError("store 必填（MemoryStore kv 抽象）")
-        if max_per_device <= 0:
+        if type(max_per_device) is not int or max_per_device <= 0:
             raise ValueError("max_per_device 须为正整数")
         self._store = store
         self.max_per_device = int(max_per_device)
         self._now = now_fn or now_ms
+        self._maintenance_lock = threading.RLock()
+        self._expiry_cursor = ""
+        self._delivery_cursor = ""
 
     # ------------------------------------------------------------------
     # 队列（待送达事件）
@@ -72,15 +80,15 @@ class DeliveryQueue:
         """入队（同 event_id 覆盖，幂等）；超容量逐出最旧项。"""
         device_id = event.device_id
         key = queue_key(device_id, event.event_id)
-        existing = self._store.get(key)
-        entry = {
-            "event": event.to_payload(),
-            "enqueued_at": self._now(),
-            # 重投时保留原 sent_at（重复入队不清空送达痕迹）
-            "sent_at": (existing or {}).get("sent_at"),
-        }
-        self._store.put(key, entry)
-        self._enforce_capacity(device_id)
+        def apply(tx):
+            existing = tx.get(key)
+            tx.put(key, {
+                "event": event.to_payload(),
+                "enqueued_at": self._now(),
+                "sent_at": existing.get("sent_at") if isinstance(existing, Mapping) else None,
+            })
+            self._enforce_capacity(device_id, tx)
+        self._store.transact(apply)
 
     def get_entry(self, device_id: str, event_id: str) -> dict | None:
         """只读单个队列项（观测/测试用）。"""
@@ -90,32 +98,35 @@ class DeliveryQueue:
     def mark_sent(self, device_id: str, event_id: str, *, at: int | None = None) -> bool:
         """标记已送达（记 sent_at，**不出队**——等端侧回执或过期才出队）。"""
         key = queue_key(device_id, event_id)
-        entry = self._store.get(key)
-        if not isinstance(entry, Mapping):
-            return False
-        entry = dict(entry)
-        entry["sent_at"] = self._now() if at is None else at
-        self._store.put(key, entry)
-        return True
+        def apply(tx):
+            entry = tx.get(key)
+            if not isinstance(entry, Mapping):
+                return False
+            entry = dict(entry)
+            entry["sent_at"] = self._now() if at is None else at
+            tx.put(key, entry)
+            return True
+        return self._store.transact(apply)
 
     def ack_event(self, device_id: str, event_id: str) -> bool:
         """端侧已确认（收到任意有效回执）→ 出队，后续 sync 不再补发。"""
         key = queue_key(device_id, event_id)
-        if self._store.get(key) is None:
-            return False
-        self._store.delete(key)
-        return True
+        def apply(tx):
+            if tx.get(key) is None:
+                return False
+            tx.delete(key)
+            return True
+        return self._store.transact(apply)
 
     def pending_events(self, device_id: str) -> list[NotificationEvent]:
         """该设备全部在队事件（按 event_id 升序 = 时间序）。"""
         prefix = f"{QUEUE_PREFIX}{device_id}:"
         events: list[NotificationEvent] = []
-        for key in self._store.keys():
-            if not key.startswith(prefix):
-                continue
+        for key in self._iter_keys(prefix):
             entry = self._store.get(key)
-            if isinstance(entry, Mapping) and isinstance(entry.get("event"), Mapping):
-                events.append(NotificationEvent.from_payload(entry["event"]))
+            event = self._decode_event(key, entry)
+            if event is not None:
+                events.append(event)
         events.sort(key=lambda e: e.event_id)
         return events
 
@@ -132,46 +143,100 @@ class DeliveryQueue:
                 and e.expires_at > at]
 
     def dequeue_expired(self, *, now: int | None = None,
-                        max_deletes: int = SWEEP_MAX_DELETES) -> list[tuple[str, str]]:
+                        max_deletes: int = SWEEP_MAX_DELETES,
+                        max_scanned: int = SWEEP_MAX_SCANNED) -> list[tuple[str, str]]:
         """过期清扫：删除过期队列项并把对应台账推进到 EXPIRED（单趟有界）。
 
         返回 ``(device_id, event_id)`` 列表（观测/测试用）。
         """
         at = self._now() if now is None else now
-        removed: list[tuple[str, str]] = []
-        for key in self._store.keys():
-            if len(removed) >= max_deletes:
-                break
-            if not key.startswith(QUEUE_PREFIX):
-                continue
+        def visit(key):
             entry = self._store.get(key)
-            if not isinstance(entry, Mapping):
-                continue
-            payload = entry.get("event")
-            if not isinstance(payload, Mapping):
-                continue
-            try:
-                event = NotificationEvent.from_payload(payload)
-            except (KeyError, TypeError, ValueError):
-                continue  # 畸形项留给容量逐出，不在清扫路径上放大故障
-            if event.expires_at > at:
-                continue
-            self._store.delete(key)
-            removed.append((event.device_id, event.event_id))
-            record = self.get_delivery(event.device_id, event.notification_id)
-            if record is not None:
-                record.advance(DeliveryStatus.EXPIRED, at=at,
-                               reason="ttl_elapsed")
-                self.put_delivery(record)
-        return removed
+            event = self._decode_event(key, entry)
+            if event is None or event.expires_at > at:
+                return None
+            def expire(tx):
+                # Re-read inside the transaction; acknowledgement may have won.
+                current = tx.get(key)
+                if current != entry:
+                    return False
+                tx.delete(key)
+                dkey = delivery_key(event.device_id, event.notification_id)
+                data = tx.get(dkey)
+                if isinstance(data, Mapping):
+                    try:
+                        record = DeliveryRecord.from_dict(data)
+                    except (TypeError, ValueError, OverflowError):
+                        record = None
+                    if record is not None and record.event_id == event.event_id and not record.revoked \
+                            and not record.status.terminal:
+                        record.advance(DeliveryStatus.EXPIRED, at=at, reason="ttl_elapsed")
+                        tx.put(dkey, record.to_dict())
+                return True
+            return (event.device_id, event.event_id) if self._store.transact(expire) else None
+        return self._sweep_keys(QUEUE_PREFIX, "_expiry_cursor", visit,
+                                max_scanned=max_scanned, max_deletes=max_deletes)
 
-    def _enforce_capacity(self, device_id: str) -> None:
+    def _enforce_capacity(self, device_id: str, tx) -> None:
         """容量纪律：超上限逐出最旧（event_id 字典序最小者）。"""
         prefix = f"{QUEUE_PREFIX}{device_id}:"
-        keys = sorted(k for k in self._store.keys() if k.startswith(prefix))
-        overflow = len(keys) - self.max_per_device
-        for key in keys[:max(0, overflow)]:
-            self._store.delete(key)
+        kept = deque()
+        for key in self._iter_keys(prefix):
+            if len(kept) == self.max_per_device:
+                tx.delete(kept.popleft())
+            kept.append(key)
+
+    def _iter_keys(self, prefix: str, *, after: str = "", max_keys: int | None = None):
+        """Native prefix paging; legacy stores retain a keys() fallback."""
+        remaining = max_keys
+        scan = getattr(self._store, "scan_keys", None)
+        while remaining is None or remaining > 0:
+            limit = SCAN_PAGE_SIZE if remaining is None else min(SCAN_PAGE_SIZE, remaining)
+            if callable(scan):
+                page = scan(prefix, after=after, limit=limit)
+            else:
+                page = heapq.nsmallest(limit, (key for key in self._store.keys()
+                                              if key.startswith(prefix) and key > after))
+            if not page:
+                return
+            yield from page
+            after = page[-1]
+            if remaining is not None:
+                remaining -= len(page)
+            if len(page) < limit:
+                return
+
+    @staticmethod
+    def _decode_event(key: str, entry) -> NotificationEvent | None:
+        if not isinstance(entry, Mapping) or not isinstance(entry.get("event"), Mapping):
+            return None
+        try:
+            event = NotificationEvent.from_payload(entry["event"])
+        except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
+            return None
+        return event if queue_key(event.device_id, event.event_id) == key else None
+
+    def _sweep_keys(self, prefix, cursor_name, visit, *, max_scanned, max_deletes):
+        for value in (max_scanned, max_deletes):
+            if type(value) is not int or value < 0:
+                raise ValueError("sweep budgets must be nonnegative integers")
+        if not max_scanned or not max_deletes:
+            return []
+        with self._maintenance_lock:
+            results = []
+            scanned = 0
+            for key in self._iter_keys(prefix, after=getattr(self, cursor_name), max_keys=max_scanned):
+                result = visit(key)
+                # Commit progress only after visit succeeds; exceptions retry this key.
+                setattr(self, cursor_name, key)
+                scanned += 1
+                if result is not None:
+                    results.append(result)
+                if scanned >= max_scanned or len(results) >= max_deletes:
+                    break
+            else:
+                setattr(self, cursor_name, "")
+            return results
 
     # ------------------------------------------------------------------
     # 送达台账（DeliveryRecord）
@@ -180,6 +245,72 @@ class DeliveryQueue:
     def put_delivery(self, record: DeliveryRecord) -> None:
         self._store.put(delivery_key(record.device_id, record.notification_id),
                         record.to_dict())
+
+    def update_delivery(self, device_id: str, notification_id: str,
+                        change: Callable[[DeliveryRecord], bool],
+                        *, event_id: str | None = None, acknowledge: bool = False,
+                        initial: DeliveryRecord | None = None) -> tuple[DeliveryRecord | None, bool]:
+        """Read/check/mutate/ack atomically; change must have no external effects.
+
+        Returns the latest matching snapshot and whether change accepted it.
+        External handlers/providers run only after this transaction commits.
+        """
+        key = delivery_key(device_id, notification_id)
+
+        def apply(tx):
+            data = tx.get(key)
+            created = not isinstance(data, Mapping) and initial is not None
+            if isinstance(data, Mapping):
+                record = DeliveryRecord.from_dict(data)
+            else:
+                record = DeliveryRecord.from_dict(initial.to_dict()) if initial is not None else None
+            if record is None or (event_id is not None and record.event_id != event_id):
+                return None, False
+            changed = change(record)
+            if changed or created:
+                tx.put(key, record.to_dict())
+            if acknowledge:
+                tx.delete(queue_key(device_id, record.event_id))
+            return record, changed
+
+        return self._store.transact(apply)
+
+    def accept_receipt(self, device_id: str, notification_id: str, event_id: str,
+                       status: DeliveryStatus, *, at: int, reason: str = "",
+                       action_id: str = "") -> tuple[DeliveryRecord | None, bool]:
+        """Accept a receipt, or claim one action callback, against current state."""
+        def change(record):
+            if record.revoked:
+                return False
+            if action_id:
+                if record.action_id or (record.status.terminal and
+                                        record.status is not DeliveryStatus.ACTION_SUBMITTED):
+                    return False
+            elif record.status.terminal or record.status is status:
+                return False
+            # A valid device receipt proves delivery even if send() is pending.
+            if record.status in (DeliveryStatus.CREATED, DeliveryStatus.QUEUED) and status in (
+                    DeliveryStatus.DISPLAYED, DeliveryStatus.OPENED, DeliveryStatus.DISMISSED,
+                    DeliveryStatus.ACTION_SUBMITTED):
+                record.advance(DeliveryStatus.DELIVERED, at=at)
+            if not record.advance(status, at=at, reason=reason):
+                return False
+            if action_id:
+                record.action_id = action_id
+            return True
+
+        return self.update_delivery(device_id, notification_id, change,
+                                    event_id=event_id, acknowledge=True)
+
+    def revoke_delivery(self, device_id: str, notification_id: str,
+                        *, at: int) -> DeliveryRecord | None:
+        def change(record):
+            if record.revoked:
+                return False
+            record.revoked = True
+            record.updated_at = at
+            return True
+        return self.update_delivery(device_id, notification_id, change, acknowledge=True)[0]
 
     def get_delivery(self, device_id: str,
                      notification_id: str) -> DeliveryRecord | None:
@@ -190,20 +321,29 @@ class DeliveryQueue:
 
     def sweep_deliveries(self, *, now: int | None = None,
                          max_age_ms: int = DELIVERY_RETENTION_MS,
-                         max_deletes: int = SWEEP_MAX_DELETES) -> int:
+                         max_deletes: int = SWEEP_MAX_DELETES,
+                         max_scanned: int = SWEEP_MAX_SCANNED) -> int:
         """台账保留期清扫：终态且超过 max_age_ms 的记录删除（单趟有界）。"""
+        if type(max_age_ms) is not int or max_age_ms < 0:
+            raise ValueError("max_age_ms must be a nonnegative integer")
         at = self._now() if now is None else now
-        deleted = 0
-        for key in self._store.keys():
-            if deleted >= max_deletes:
-                break
-            if not key.startswith(DELIVERY_PREFIX):
-                continue
+        def visit(key):
             data = self._store.get(key)
             if not isinstance(data, Mapping):
-                continue
-            record = DeliveryRecord.from_dict(data)
+                return None
+            try:
+                record = DeliveryRecord.from_dict(data)
+            except (TypeError, ValueError, OverflowError):
+                return None
             if record.status.terminal and at - record.updated_at > max_age_ms:
-                self._store.delete(key)
-                deleted += 1
-        return deleted
+                def remove(tx):
+                    # A concurrent receipt/revoke may have refreshed this record.
+                    if tx.get(key) != data:
+                        return False
+                    tx.delete(key)
+                    return True
+                if self._store.transact(remove):
+                    return key
+            return None
+        return len(self._sweep_keys(DELIVERY_PREFIX, "_delivery_cursor", visit,
+                                    max_scanned=max_scanned, max_deletes=max_deletes))

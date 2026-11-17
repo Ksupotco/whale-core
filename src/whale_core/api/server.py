@@ -143,6 +143,7 @@ class _Handler(BaseHTTPRequestHandler):
             pass
 
     def _body_json(self, max_bytes: int = MAX_BODY_BYTES) -> dict | None:
+        from whale_core.security.json_input import loads
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -150,8 +151,8 @@ class _Handler(BaseHTTPRequestHandler):
         if length <= 0 or length > max_bytes:
             return None
         try:
-            data = json.loads(self.rfile.read(length))
-        except (json.JSONDecodeError, UnicodeDecodeError):
+            data = loads(self.rfile.read(length))
+        except (ValueError, UnicodeDecodeError):
             return None
         return data if isinstance(data, dict) else None
 
@@ -311,12 +312,22 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(403, _error("forbidden", "path outside static root"))
             return
         if not target.is_file():
+            if rel.startswith("assets/") or target.suffix:
+                self._send(404, _error("not_found", "static resource not found"))
+                return
             target = root / "index.html"  # SPA 回落
             if not target.is_file():
                 self._send(404, _error("not_found", "console not built (web/dist missing)"))
                 return
         ctype = self._STATIC_TYPES.get(target.suffix.lower(), "application/octet-stream")
-        data = target.read_bytes()
+        try:
+            data = target.read_bytes()
+        except FileNotFoundError:
+            self._send(404, _error("not_found", "static resource not found"))
+            return
+        except OSError:
+            self._send(403, _error("forbidden", "static resource unavailable"))
+            return
         self._send(200, data, content_type=ctype)
 
 

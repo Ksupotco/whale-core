@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import Any, Callable, Iterable, Mapping
 
 from whale_core.devices.transports.base import new_id, now_ms
-from whale_core.notifications.delivery_queue import DeliveryQueue
+from whale_core.notifications.delivery_queue import DeliveryQueue, SWEEP_MAX_SCANNED
 from whale_core.notifications.delivery_receipts import DeliveryReceipts
 from whale_core.notifications.models import (
     ACTION_ID_RE,
@@ -145,12 +145,7 @@ class NotificationGateway:
         无论通道是否支持撤回：队列项立即出队（不再补传），台账标 revoked。
         通道不支持/设备离线时返回 False（诚实，不伪报）。
         """
-        record = self.queue.get_delivery(device_id, notification_id)
-        if record is not None:
-            self.queue.ack_event(device_id, record.event_id)  # 停止补传
-            record.revoked = True
-            record.updated_at = self._now()
-            self.queue.put_delivery(record)
+        self.queue.revoke_delivery(device_id, notification_id, at=self._now())
         delivered = False
         for provider in self.router.providers:
             try:
@@ -188,7 +183,7 @@ class NotificationGateway:
         sent = 0
         for event in events:
             record = await self.router.dispatch(event)
-            if record.status is DeliveryStatus.DELIVERED:
+            if not record.revoked and record.status is DeliveryStatus.DELIVERED:
                 sent += 1
         return sent
 
@@ -197,9 +192,10 @@ class NotificationGateway:
     # ------------------------------------------------------------------
 
     def sweep_expired(self, *, now: int | None = None,
-                      max_deletes: int = 500) -> int:
+                      max_deletes: int = 500, max_scanned: int = SWEEP_MAX_SCANNED) -> int:
         """过期清扫（有界）：过期队列项出队 + 台账推进 EXPIRED。"""
-        return len(self.queue.dequeue_expired(now=now, max_deletes=max_deletes))
+        return len(self.queue.dequeue_expired(now=now, max_deletes=max_deletes,
+                                              max_scanned=max_scanned))
 
     def get_delivery(self, device_id: str,
                      notification_id: str) -> DeliveryRecord | None:

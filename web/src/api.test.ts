@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, api, apiUrl, isUnauthorized, setToken } from "./api";
+import { ApiError, api, apiUrl, isUnauthorized, setToken, studioApi } from "./api";
 
 /** 构造最小可用的 Response mock。 */
 function mockResponse(
@@ -28,6 +28,33 @@ function stubFetch(res: Response) {
 }
 
 describe("api client", () => {
+  it.each([
+    ["plugin configuration", (s: AbortSignal) => api.plugin("id", s)],
+    ["task detail", (s: AbortSignal) => api.task("id", s)],
+    ["task timeline", (s: AbortSignal) => api.taskTimeline("id", s)],
+    ["trace list", (s: AbortSignal) => api.tracesList({}, s)],
+    ["trace detail", (s: AbortSignal) => api.tracesDetail("id", s)],
+    ["activity", (s: AbortSignal) => api.activityList(50, 0, s)],
+    ["memory catalog", (s: AbortSignal) => studioApi.memorySubjects(s)],
+    ["memory browse", (s: AbortSignal) => studioApi.memoryBrowse({ space_id: "space" }, s)],
+    ["memory search", (s: AbortSignal) => api.searchMemory("q", s)],
+  ] as const)("%s forwards cancellation through the HTTP client", async (_name, read) => {
+    const fetchMock = stubFetch(mockResponse(200, { result: { trace: {}, hits: [] } }));
+    const controller = new AbortController(); await read(controller.signal);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBe(controller.signal);
+  });
+  it.each(["status", "tasks", "plugins", "approvals", "settings", "diagnostics", "skills", "workflowSettings", "life"] as const)(
+    "%s forwards the read cancellation signal to fetch", async (name) => {
+      const fetchMock = stubFetch(mockResponse(200, { result: { tasks: [], plugins: [], approvals: [], skills: [] } }));
+      const controller = new AbortController();
+      await api[name](controller.signal);
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(init.signal).toBe(controller.signal);
+      expect(init.method ?? "GET").toBe("GET");
+      expect(init.redirect).toBe("error");
+    },
+  );
   afterEach(() => {
     vi.unstubAllGlobals();
     setToken("");

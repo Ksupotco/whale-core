@@ -6,7 +6,24 @@
  * - 错误统一抛 ApiError（code/message 取自 `{error:{code,message}}`）。
  */
 
+import { readJsonEvents } from "./sse";
+
 export const API_BASE = "/api/v1";
+
+export interface RetentionReport {
+  state: string; at?: number; duration_ms?: number; scanned?: number;
+  receipt_scanned?: number; deleted?: number; marked_unknown?: number; more?: boolean;
+  scan_mode?: string; error?: string;
+}
+export interface DeviceReport {
+  devices: { device_id: string; label?: string; status: string; online?: boolean; scopes?: string[] }[];
+  retention?: RetentionReport;
+}
+export interface MemoryWorkerReport {
+  state: string; error?: string; claimed?: number; completed?: number; failed?: number;
+  retried?: number; model_failures?: number; commit_rejected?: number;
+  queue_depth?: number; in_flight?: boolean; model_busy?: boolean;
+}
 
 const TOKEN_KEY = "whale.console.token";
 
@@ -229,6 +246,7 @@ export interface RuntimeSettings {
   budget?: BudgetView;
 }
 export interface DiagnosticReport {
+  memory_worker?: MemoryWorkerReport;
   checks: { name: string; status: string; detail: string }[];
   summary: Record<string, unknown>;
 }
@@ -303,6 +321,7 @@ export function isUnauthorized(err: unknown): boolean {
 // ---------- token 管理 ----------
 
 let cachedToken: string | null = null;
+let tokenVersion = 0;
 
 function storageAvailable(): boolean {
   try {
@@ -326,6 +345,7 @@ export function getToken(): string {
 }
 
 export function setToken(token: string): void {
+  ++tokenVersion;
   cachedToken = token.trim();
   if (!storageAvailable()) return;
   try {
@@ -365,6 +385,7 @@ export function apiUrl(path: string): string {
 
 /** 发起请求并返回原始 Response；非 2xx 时按 `{error:{code,message}}` 解析并抛 ApiError。 */
 async function rawRequest(path: string, init?: RequestInit): Promise<Response> {
+  const version = tokenVersion;
   const headers = new Headers(init?.headers);
   const token = getToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -395,7 +416,8 @@ async function rawRequest(path: string, init?: RequestInit): Promise<Response> {
     } catch {
       /* 非 JSON 错误体：保留 http_<status> 兜底 */
     }
-    if (res.status === 401) notifyUnauthorized();
+    if (res.status === 401 && version === tokenVersion && !init?.signal?.aborted)
+      notifyUnauthorized();
     throw new ApiError(code, message, res.status);
   }
   return res;
@@ -411,6 +433,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 // ---------- 端点 ----------
 
 export const api = {
+  devices: (signal?: AbortSignal) => request<DeviceReport>("/devices", { signal }),
   conversation: (id = "console") =>
     request<{
       conversation_id: string;
@@ -478,8 +501,8 @@ export const api = {
       throw new ApiError("invalid_artifact", "产物地址无效", 0);
     return (await rawRequest(path.slice(API_BASE.length), { signal })).blob();
   },
-  skills: async () =>
-    (await request<{ skills: SkillInfo[] }>("/workflows/skills")).skills,
+  skills: async (signal?: AbortSignal) =>
+    (await request<{ skills: SkillInfo[] }>("/workflows/skills", { signal })).skills,
   runSkill: (name: string, input_text: string) =>
     request<unknown>(`/workflows/skills/${encodeURIComponent(name)}/run`, {
       method: "POST",
@@ -490,7 +513,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ topics }),
     }),
-  life: () => request<LifeState>("/life"),
+  life: (signal?: AbortSignal) => request<LifeState>("/life", { signal }),
   addInterest: (topic: string) =>
     request<LifeInterest>("/life/interests", {
       method: "POST",
@@ -507,14 +530,14 @@ export const api = {
       body: JSON.stringify({ topic, signal }),
     }),
 
-  workflowSettings: () => request<WorkflowSettings>("/workflows/settings"),
+  workflowSettings: (signal?: AbortSignal) => request<WorkflowSettings>("/workflows/settings", { signal }),
   saveWorkflowSettings: (settings: WorkflowSettings) =>
     request<WorkflowSettings>("/workflows/settings", {
       method: "POST",
       body: JSON.stringify(settings),
     }),
 
-  settings: () => request<RuntimeSettings>("/settings"),
+  settings: (signal?: AbortSignal) => request<RuntimeSettings>("/settings", { signal }),
   saveSettings: (settings: {
     setup_completed?: boolean;
     profile?: "cloud" | "local";
@@ -531,21 +554,21 @@ export const api = {
     }),
   testProvider: () =>
     request<ProviderTest>("/providers/test", { method: "POST", body: "{}" }),
-  diagnostics: () => request<DiagnosticReport>("/diagnostics"),
+  diagnostics: (signal?: AbortSignal) => request<DiagnosticReport>("/diagnostics", { signal }),
   testPlugin: (id: string) =>
     request<ProviderTest & { via?: string }>(
       `/plugins/${encodeURIComponent(id)}/test`,
       { method: "POST" },
     ),
-  status: () => request<StatusResult>("/status"),
+  status: (signal?: AbortSignal) => request<StatusResult>("/status", { signal }),
 
   health: () => request<HealthResult>("/health"),
 
-  plugins: async () =>
-    (await request<{ plugins: PluginInfo[] }>("/plugins")).plugins,
+  plugins: async (signal?: AbortSignal) =>
+    (await request<{ plugins: PluginInfo[] }>("/plugins", { signal })).plugins,
 
-  plugin: (id: string) =>
-    request<PluginDetail>(`/plugins/${encodeURIComponent(id)}`),
+  plugin: (id: string, signal?: AbortSignal) =>
+    request<PluginDetail>(`/plugins/${encodeURIComponent(id)}`, { signal }),
 
   setPluginEnabled: (id: string, enabled: boolean) =>
     request<{ plugin_id: string; status: string }>(
@@ -563,9 +586,9 @@ export const api = {
       { method: "POST", body: JSON.stringify({ config }) },
     ),
 
-  tasks: async () => (await request<{ tasks: TaskRecord[] }>("/tasks")).tasks,
+  tasks: async (signal?: AbortSignal) => (await request<{ tasks: TaskRecord[] }>("/tasks", { signal })).tasks,
 
-  task: (id: string) => request<TaskRecord>(`/tasks/${encodeURIComponent(id)}`),
+  task: (id: string, signal?: AbortSignal) => request<TaskRecord>(`/tasks/${encodeURIComponent(id)}`, { signal }),
   cancelTask: (id: string) =>
     request<TaskRecord>(`/tasks/${encodeURIComponent(id)}/cancel`, {
       method: "POST",
@@ -580,10 +603,11 @@ export const api = {
       method: "POST",
     }),
 
-  searchMemory: async (q: string) =>
+  searchMemory: async (q: string, signal?: AbortSignal) =>
     (
       await request<{ hits: MemoryHit[] }>(
         `/memory/search?q=${encodeURIComponent(q)}`,
+        { signal },
       )
     ).hits,
 
@@ -608,8 +632,8 @@ export const api = {
       signal,
     }),
 
-  approvals: async () =>
-    (await request<{ approvals: Approval[] }>("/approvals")).approvals,
+  approvals: async (signal?: AbortSignal) =>
+    (await request<{ approvals: Approval[] }>("/approvals", { signal })).approvals,
 
   decideApproval: (draftId: string, decision: "approve" | "reject") =>
     request<{ draft_id: string; decision: string }>(
@@ -619,7 +643,7 @@ export const api = {
 
   // ---- Trace 账本（诊断视图走 console API token，放 api 组） ----
 
-  tracesList: (params: TracesQuery = {}) => {
+  tracesList: (params: TracesQuery = {}, signal?: AbortSignal) => {
     const qs = new URLSearchParams();
     if (params.kind) qs.set("kind", params.kind);
     if (params.conversation_id)
@@ -631,24 +655,26 @@ export const api = {
     if (params.limit !== undefined) qs.set("limit", String(params.limit));
     if (params.offset !== undefined) qs.set("offset", String(params.offset));
     const suffix = qs.toString();
-    return request<TracesListResult>(`/traces${suffix ? `?${suffix}` : ""}`);
+    return request<TracesListResult>(`/traces${suffix ? `?${suffix}` : ""}`, { signal });
   },
 
-  tracesDetail: async (traceId: string) =>
+  tracesDetail: async (traceId: string, signal?: AbortSignal) =>
     (
       await request<{ trace: TraceDetail }>(
         `/traces/${encodeURIComponent(traceId)}`,
+        { signal },
       )
     ).trace,
 
-  activityList: (limit = 30, offset = 0) =>
+  activityList: (limit = 30, offset = 0, signal?: AbortSignal) =>
     request<{ total: number; items: ActivityItem[] }>(
       `/activity?limit=${limit}&offset=${offset}`,
+      { signal },
     ),
 
   /** issue #43：任务执行时间线（可读阶段/回执/送达/重试建议/Trace 关联）。 */
-  taskTimeline: (id: string) =>
-    request<TaskTimeline>(`/tasks/${encodeURIComponent(id)}/timeline`),
+  taskTimeline: (id: string, signal?: AbortSignal) =>
+    request<TaskTimeline>(`/tasks/${encodeURIComponent(id)}/timeline`, { signal }),
 };
 
 // ---------- Whale Studio（S6：关系画布；所有授权判断都在服务端） ----------
@@ -1251,10 +1277,10 @@ export const studioApi = {
 
   // ---- 记忆管理面（主体优先）：subjects 总览 + browse 浏览 + 治理操作 ----
 
-  memorySubjects: () =>
-    request<MemorySubjects>("/studio/memory/subjects"),
+  memorySubjects: (signal?: AbortSignal) =>
+    request<MemorySubjects>("/studio/memory/subjects", { signal }),
 
-  memoryBrowse: (params: MemoryBrowseParams) => {
+  memoryBrowse: (params: MemoryBrowseParams, signal?: AbortSignal) => {
     const qs = new URLSearchParams();
     if (params.space_id) qs.set("space_id", params.space_id);
     else if (params.principal_id) qs.set("principal_id", params.principal_id);
@@ -1271,6 +1297,7 @@ export const studioApi = {
     const suffix = qs.toString();
     return request<MemoryBrowseResult>(
       `/studio/memory/browse${suffix ? `?${suffix}` : ""}`,
+      { signal },
     );
   },
 
@@ -1363,6 +1390,7 @@ export interface EventStream {
 export function streamEvents(handlers: EventStreamHandlers): EventStream {
   const controller = new AbortController();
   void (async () => {
+    let body: ReadableStream<Uint8Array> | null = null;
     try {
       const res = await rawRequest("/events", {
         headers: { Accept: "text/event-stream" },
@@ -1370,35 +1398,22 @@ export function streamEvents(handlers: EventStreamHandlers): EventStream {
       });
       if (!res.body)
         throw new ApiError("no_stream", "SSE response has no body", res.status);
+      body = res.body;
+      if (controller.signal.aborted) { void res.body.cancel().catch(() => undefined); return; }
       handlers.onOpen?.();
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let idx: number;
-        while ((idx = buffer.indexOf("\n")) >= 0) {
-          const line = buffer.slice(0, idx).replace(/\r$/, "");
-          buffer = buffer.slice(idx + 1);
-          // 只处理 data: 行；心跳注释（": ping"）与空行忽略
-          if (!line.startsWith("data:")) continue;
-          const payload = line.slice("data:".length).trim();
-          if (!payload) continue;
-          try {
-            handlers.onEvent(JSON.parse(payload) as WhaleEvent);
-          } catch {
-            /* 跳过无法解析的帧 */
-          }
-        }
+      for await (const event of readJsonEvents(res.body, controller.signal)) {
+        if (!controller.signal.aborted) handlers.onEvent(event as unknown as WhaleEvent);
       }
+      if (controller.signal.aborted) return;
       handlers.onError?.(
         new ApiError("stream_closed", "event stream closed", 0),
       );
     } catch (e) {
       if (controller.signal.aborted) return; // 主动 close，不算错误
       handlers.onError?.(e instanceof Error ? e : new Error(String(e)));
+    } finally {
+      // onOpen can fail before the shared reader takes ownership.
+      if (body && !body.locked) void body.cancel().catch(() => undefined);
     }
   })();
   return {
@@ -1444,76 +1459,22 @@ export async function chatStream(
   callbacks: ChatStreamCallbacks,
   signal?: AbortSignal,
 ): Promise<ChatStreamDone | null> {
-  const headers = new Headers({
-    "Content-Type": "application/json",
-    Accept: "text/event-stream",
-  });
-  const token = getToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  const res = await fetch(apiUrl("/chat/stream"), {
+  const res = await rawRequest("/chat/stream", {
     method: "POST",
-    headers,
+    headers: { Accept: "text/event-stream" },
     body: JSON.stringify({ conversation_id: conversationId, text }),
     signal,
-    redirect: "error",
   });
-  if (!res.ok) {
-    let code = `http_${res.status}`;
-    let message = res.statusText || `HTTP ${res.status}`;
-    try {
-      const body: unknown = await res.json();
-      if (body && typeof body === "object" && "error" in body) {
-        const err = (body as { error: { code?: unknown; message?: unknown } })
-          .error;
-        if (typeof err.code === "string") code = err.code;
-        if (typeof err.message === "string") message = err.message;
-      }
-    } catch {
-      /* 保留默认错误信息 */
-    }
-    throw new ApiError(code, message, res.status);
-  }
   if (!res.body)
     throw new ApiError("no_stream", "chat stream has no body", res.status);
-  const reader = res.body.getReader();
-  // 双保险：真实 fetch 的 signal 会中止读取；手工 mock 的流则靠这里取消。
-  const onAbort = () => {
-    reader.cancel().catch(() => undefined);
-  };
-  signal?.addEventListener("abort", onAbort);
-  const decoder = new TextDecoder();
-  let buffer = "";
   let done: ChatStreamDone | null = null;
-  try {
-    for (;;) {
-      const { done: finished, value } = await reader.read();
-      if (finished) break;
-      buffer += decoder.decode(value, { stream: true });
-      let idx: number;
-      while ((idx = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, idx).replace(/\r$/, "");
-        buffer = buffer.slice(idx + 1);
-        if (!line.startsWith("data:")) continue;
-        const payload = line.slice("data:".length).trim();
-        if (!payload) continue;
-        try {
-          const ev = JSON.parse(payload) as Record<string, unknown>;
-          if (ev.type === "phase") callbacks.onPhase?.(String(ev.phase ?? ""));
-          else if (ev.type === "delta")
-            callbacks.onDelta?.(String(ev.text ?? ""));
-          else if (ev.type === "done") {
-            done = ev as unknown as ChatStreamDone;
-            callbacks.onDone?.(done);
-          } else if (ev.type === "error") {
-            callbacks.onError?.(String(ev.error ?? "server"));
-          }
-        } catch {
-          /* 跳过无法解析的帧 */
-        }
-      }
-    }
-  } finally {
-    signal?.removeEventListener("abort", onAbort);
+  for await (const ev of readJsonEvents(res.body, signal)) {
+    if (ev.type === "phase") callbacks.onPhase?.(String(ev.phase ?? ""));
+    else if (ev.type === "delta") callbacks.onDelta?.(String(ev.text ?? ""));
+    else if (ev.type === "done") {
+      done = ev as unknown as ChatStreamDone;
+      callbacks.onDone?.(done);
+    } else if (ev.type === "error") callbacks.onError?.(String(ev.error ?? "server"));
   }
   return done;
 }
