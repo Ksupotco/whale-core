@@ -163,6 +163,13 @@ class SqliteMemoryStore:
                     "FROM records WHERE key=?", (key,)).fetchone()
                 return store._decode(row) if row else None
 
+            def list_records(self, kind: MemoryKind, space_id: str):
+                rows = store.db.execute(
+                    "SELECT key,kind,content,record_id,created_at,tags,space_id "
+                    "FROM records WHERE kind=? AND space_id=?",
+                    (kind.value, space_id)).fetchall()
+                return [store._decode(row) for row in rows]
+
             def put_record(self, record: MemoryRecord) -> None:
                 # No nested transaction/commit; part of the surrounding BEGIN.
                 store.db.execute(
@@ -171,6 +178,10 @@ class SqliteMemoryStore:
                      json.dumps(dict(record.content), ensure_ascii=False),
                      record.record_id, record.created_at.isoformat(),
                      json.dumps(record.tags, ensure_ascii=False), record.space_id))
+
+            def delete_record(self, key: str) -> None:
+                store.db.execute("DELETE FROM records WHERE key=?", (key,))
+                store.db.execute("DELETE FROM kv WHERE key=?", (key,))
 
         with self._lock:
             self.db.execute("BEGIN IMMEDIATE")

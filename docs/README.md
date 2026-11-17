@@ -15,6 +15,9 @@
 | [vision-map.md](vision-map.md) | 原设想 → whale-core 类型与模块落点对照（权威覆盖表在 whale-io） |
 | [devices.md](devices.md) | 当前 V2 设备面：配对、WSS、动作、通知、scope 与回执；协议 canonical source 在 whale-mobile 的 `contracts/v2/`（本仓为镜像） |
 | [devices-v2-design.md](devices-v2-design.md) | V2 设备运行时、生产接线现状、多通道集成边界与下一步 |
+| [memory-functional-spec-2026-11-13.md](memory-functional-spec-2026-11-13.md) | Memory 功能规格：用户行为、功能边界、验收场景与当前差距 |
+| [memory-architecture-v1-2026-11-12.md](memory-architecture-v1-2026-11-12.md) | Memory 需求驱动架构草案与代码落点 |
+| [memory-product-plan-2026-11-11.md](memory-product-plan-2026-11-11.md) | Memory 需求访谈决定与开发顺序 |
 
 ### 部署、发行与运维
 

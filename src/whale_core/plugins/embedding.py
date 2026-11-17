@@ -27,7 +27,7 @@ class EmbeddingError(RuntimeError):
 
 class OpenAICompatibleEmbedding:
     def __init__(self, *, base_url: str, api_key: str = "", model: str = "text-embedding-3-small",
-                 timeout: float = 8, batch_size: int = 32, cache_size: int = 512,
+                 timeout: float = 8, batch_size: int = 20, cache_size: int = 512,
                  max_inputs: int = 512):
         self.base_url=provider_http.validate_base_url(base_url)
         if not model.strip() or not math.isfinite(timeout) or not 0 < timeout <= 120:

@@ -144,10 +144,21 @@ class NativeMemoryAdapter:
         query = str(request.get("query") or "")
         # A fresh query conversation gives no privileged access to source-session
         # history. This matches the cross-session memory question.
-        answer = self.companion.chat(query, episodic=False)
-        hits = self.curator.recall(query)
+        # An evaluation harness may supply the authorized read scope. Official
+        # raw-native queries omit it, retaining the legacy unpartitioned path.
+        allowed_spaces = request.get("allowed_spaces")
+        query_now = getattr(self, "memory_now", None)
+        answer = self.companion.chat(
+            query, episodic=False, allowed_spaces=allowed_spaces,
+            memory_now=query_now)
+        recall_options = {"allowed_spaces": allowed_spaces}
+        if query_now is not None:
+            recall_options["now"] = query_now
+        hits = self.curator.recall(query, **recall_options)
         episodes = self.store.list_by_kind(MemoryKind.EPISODE)
-        curated = [record for record in episodes if "curated" in record.tags]
+        curated = [record for record in
+                   (*episodes, *self.store.list_by_kind(MemoryKind.PREFERENCE))
+                   if "curated" in record.tags and "superseded" not in record.tags]
         return {
             "answer": answer,
             "retrieved_memory_ids": [hit.record.key for hit in hits],

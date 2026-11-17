@@ -266,8 +266,10 @@ class QqInboundWorkflow:
             allowed = ctx.allowed_memory_spaces
             # A group with no writable memory must NEVER fall back to the
             # owner's protected vault. Forget is also a write operation.
-            from whale_core.core.memory_commands import REMEMBER_PREFIXES, FORGET_PREFIXES
-            if not space_id and text.strip().startswith(REMEMBER_PREFIXES + FORGET_PREFIXES):
+            from whale_core.core.memory_commands import (
+                REMEMBER_PREFIXES, FORGET_PREFIXES, CORRECT_PREFIXES)
+            if not space_id and text.strip().startswith(
+                    REMEMBER_PREFIXES + FORGET_PREFIXES + CORRECT_PREFIXES):
                 return "当前会话没有可写记忆库，请先在工作台绑定有写权限的记忆空间。"
         return handle_memory_command(
             self.store, text, source="qq:owner",

@@ -169,13 +169,20 @@ class InstrumentedProvider:
         self._store = store
         self._key = _HEALTH_PREFIX + name
 
-    def reply(self, text, *, persona="", memories=(), history=()) -> str:
+    def reply(self, text, *, persona="", memories=(), history=(),
+              memory_context=None) -> str:
         stats = _load_stats(self._store, self._key)
         t0 = time.monotonic()
         try:
-            result = self._inner.reply(
-                text, persona=persona, memories=memories, history=history
-            )
+            kwargs = {"persona": persona, "memories": memories, "history": history}
+            if memory_context is not None:
+                import inspect
+                try:
+                    if "memory_context" in inspect.signature(self._inner.reply).parameters:
+                        kwargs["memory_context"] = memory_context
+                except (TypeError, ValueError):
+                    pass
+            result = self._inner.reply(text, **kwargs)
         except Exception as exc:
             kind = getattr(exc, "kind", None)
             if not isinstance(kind, str) or not kind:

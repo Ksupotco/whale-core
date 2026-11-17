@@ -543,6 +543,19 @@ def test_api_memory_correct_and_delete_own(api):
     new = store.get_record(data["result"]["new_key"])
     assert new.space_id == space_id and "论文下周交" in str(
         new.content["summary"])
+    assert new.content["correction_family_id"] == old.content["correction_family_id"]
+    status, history = _req(
+        server, "GET", "/api/v1/studio/members/memory/history",
+        query={"principal_id": A_PRINCIPAL,
+               "actor_conversation_key": A_PRIVATE_KEY, "key": key})
+    assert status == 200
+    assert [row["summary"] for row in history["result"]["versions"]] == [
+        old.content["summary"], new.content["summary"]]
+    status, _ = _req(
+        server, "GET", "/api/v1/studio/members/memory/history",
+        query={"principal_id": A_PRINCIPAL,
+               "actor_conversation_key": B_PRIVATE_KEY, "key": key})
+    assert status == 403
     # 旧记录退出召回，新记录可召回
     curator = MemoryCurator(store)
     hits = curator.recall("论文", allowed_spaces=(space_id,))

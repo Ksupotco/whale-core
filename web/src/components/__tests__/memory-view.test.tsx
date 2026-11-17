@@ -134,6 +134,29 @@ beforeEach(() => {
 });
 
 describe("MemoryView 主体优先记忆管理", () => {
+  it("展示每周画像的推测和依据，并可暂停", async () => {
+    const mock = mockStudioFetch({
+      "/studio/memory/subjects": () => jsonResult(SUBJECTS),
+      "/studio/memory/portrait": (call) =>
+        call.method === "POST"
+          ? jsonResult({ changed: true })
+          : jsonResult({ owners: [{ owner_id: "owner", events: [], profiles: [{
+              item_id: "p1", kind: "interest", context: "科幻", topic: "天文",
+              need: "", effective_response: "", expression_preference: "",
+              evidence_ids: ["ep:1"], inferred: true, active: true,
+            }] }] }),
+    });
+    render(<MemoryView />);
+    await screen.findByText("可能喜欢：天文");
+    expect(screen.getByText(/依据 ep:1/)).toBeTruthy();
+    fireEvent.click(screen.getByText("暂停"));
+    await waitFor(() => expect(fetchCalls(mock).some((call) =>
+      call.method === "POST" && call.url.includes("/studio/memory/portrait")
+      && (call.body as { action?: string; active?: boolean })?.action === "update"
+      && (call.body as { active?: boolean })?.active === false,
+    )).toBe(true));
+  });
+
   it("加载主体总览：渲染主人/群友/群聊/其他空间四区及状态徽标", async () => {
     mockStudioFetch({
       "/studio/memory/subjects": () => jsonResult(SUBJECTS),

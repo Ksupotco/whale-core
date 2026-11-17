@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from whale_core.memory.governance import (
     confirm_fact, expire_pending_facts, propose_fact, supersede,
@@ -8,13 +8,12 @@ from whale_core.memory.store import InMemoryStore, MemoryKind
 
 def test_pending_facts_expire_and_keep_their_memory_space():
     store = InMemoryStore()
-    now = datetime(2026, 11, 8, tzinfo=timezone.utc)
     key = propose_fact(store, "用户正在准备模拟电路考试",
                        source="conversation", evidence_id="message:1",
                        ttl_days=1, space_id="owner-working")
     record = store.get_record(key)
     assert record.space_id == "owner-working"
-    assert expire_pending_facts(store, now=now + timedelta(days=2)) == 1
+    assert expire_pending_facts(store, now=record.created_at + timedelta(days=2)) == 1
     assert store.get_record(key) is None
 
 

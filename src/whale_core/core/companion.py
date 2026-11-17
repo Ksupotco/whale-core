@@ -7,52 +7,15 @@ from typing import Protocol, Sequence
 from uuid import uuid4
 from whale_core.memory.store import MemoryStore
 from whale_core.memory.curation import MemoryCurator
+from whale_core.memory.context import _recall, build_memory_context
 from whale_core.memory.continuity import remember_episode, build_continuity_context
 from whale_core.memory.history import (append_assistant_message, append_user_message, conversation_lock, load_history)
 from whale_core.memory.spaces import default_write_space
-from whale_core.memory.types import MemorySpaceType
 
 class TextCompanion(Protocol):
     def reply(self, text: str, *, persona: str = "", memories=(), history=(),
               images=()) -> str: ...
 
-
-def _norm_mem(text: str) -> str:
-    """记忆文本的规范化去重键：取情节中用户侧内容，压缩空白与标点。"""
-    import re as _re
-    head = str(text)[:120]
-    m = _re.match(r"^用户：(.+?)(?:\n|$)", str(text), _re.S)
-    if m:
-        head = m.group(1)
-    return _re.sub(r"[\s\W]+", "", head)[:40]
-
-
-def _normalize_summary(text: str) -> str:
-    return _norm_mem(text)
-
-
-def _recall(curator, query: str, allowed_spaces, **kwargs):
-    """Never discard resolved space ACL on a retrieval error.
-
-    Legacy no-context callers may use the older signature; an authorized
-    conversation must use a scope-aware curator or fail closed.
-    include_protected=False 时不向下游传该参数（兼容旧 curator 签名）。
-    """
-    if not kwargs.get("include_protected"):
-        kwargs.pop("include_protected", None)
-    if allowed_spaces is None:
-        kwargs.pop("include_protected", None)
-        return curator.recall(query, **kwargs)
-    return curator.recall(query, allowed_spaces=allowed_spaces, **kwargs)
-
-
-def _spaces_include_vault(spaces) -> bool:
-    """授权空间集合里是否含受保护原始库（resolver 已按主人私聊规则过滤）。"""
-    try:
-        return any(getattr(s, "type", None) is MemorySpaceType.PROTECTED_ORIGINAL
-                   for s in (spaces or ()))
-    except Exception:
-        return False
 
 def _writeback_enabled() -> bool:
     import os
@@ -92,8 +55,17 @@ def _maybe_writeback_inner_state(store: MemoryStore, *, conversation_id: str,
 
 class WhaleCompanion:
     def __init__(self, store: MemoryStore, model: TextCompanion, *, curator: MemoryCurator | None = None,
-                 timeline=None, self_uid: str = "", exploration_delivery=None):
+                 timeline=None, self_uid: str = "", exploration_delivery=None,
+                 memory_extractor=None):
         self.store, self.model, self.curator = store, model, curator
+        self.memory_extractor = memory_extractor
+        if memory_extractor is not None:
+            from whale_core.memory.formation import JOB_PREFIX, schedule
+            if any(key.startswith(JOB_PREFIX) for key in store.keys()):
+                schedule(store, memory_extractor)
+            from whale_core.memory.person_model import PENDING_PREFIX, schedule_reviews
+            if any(key.startswith(PENDING_PREFIX) for key in store.keys()):
+                schedule_reviews(store, memory_extractor)
         # G1：群时间线（GroupTimelineStore）；群会话的历史从它渲染（带归属），
         # 不再用无身份的历史回放。
         self.timeline = timeline
@@ -111,7 +83,7 @@ class WhaleCompanion:
              episodic: bool = True, context=None, allowed_spaces=None,
              write_space: str | None = None, location: str | None = None,
              on_delta=None, should_stop=None, metrics=None, on_phase=None,
-             followup: bool = False) -> str:
+             followup: bool = False, memory_now=None) -> str:
         # 不把整轮 LLM 包进 conversation_lock：同会话重叠请求要能在 A 还在生成时
         # 读到 A 已落盘的用户原话。历史读写各自短临界区（见 _chat）。
         return self._chat(text, conversation_id=conversation_id, user_text=user_text,
@@ -121,14 +93,14 @@ class WhaleCompanion:
                           write_space=write_space, location=location,
                           on_delta=on_delta,
                           should_stop=should_stop, metrics=metrics,
-                          on_phase=on_phase)
+                          on_phase=on_phase, memory_now=memory_now)
 
     def _chat(self, text: str, *, conversation_id: str = "", user_text: str | None = None,
               images: Sequence[bytes] = (), turn_key: str = "",
               episodic: bool = True, context=None, allowed_spaces=None,
               write_space: str | None = None, location: str | None = None,
               on_delta=None, should_stop=None, metrics=None, on_phase=None,
-              followup: bool = False) -> str:
+              followup: bool = False, memory_now=None) -> str:
         original = text if user_text is None else user_text
         # issue #45：真实阶段反馈（接收→上下文/记忆构建→模型请求→整理）；
         # 无回调时零开销。阶段与耗时全部实测，不伪造进度百分比。
@@ -244,58 +216,20 @@ class WhaleCompanion:
             _hint = _hint()
         if _hint:
             persona_text = (persona_text or "") + "\n\n" + _hint
-        from whale_core.memory.transient import (
-            is_transient_time_only, scrub_episode_summary, scrub_transient_time)
-
-        def _injectable_memory(raw: str) -> str:
-            """背景记忆：整段报时丢弃；否则剥报时句，只留有意义事实。"""
-            text_m = str(raw or "").strip()
-            if not text_m or is_transient_time_only(text_m):
-                return ""
-            cleaned = scrub_episode_summary(text_m)
-            if cleaned:
-                return cleaned
-            # 非「用户：/Enxi：」结构的摘要：按句剥报时
-            return scrub_transient_time(text_m)
-
-        if self.curator is not None:
-            memories = []
-            for hit in _recall(self.curator, original, spaces,
-                               include_protected=_spaces_include_vault(spaces)):
-                piece = _injectable_memory(
-                    str(hit.record.content.get("summary", "")))
-                if piece:
-                    memories.append(piece)
-            # 近期对话情节补充注入的纪律（owner 反馈 2026-10-31「总重复图片的事」）：
-            # 1. **只取本会话**的情节——别会话的旧情节会把话题带偏；
-            # 2. 规范化去重（同主题多条情节只留最新一条）；
-            # 3. 封顶 3 条（情节是背景，不是当前话题）。
-            seen_norm = {_norm_mem(m) for m in memories}
-            recent_this_conv = 0
-            for record in ctx.recent_episodes:
-                if "chat" not in record.tags:
-                    continue
-                if str(record.content.get("conversation_id") or "") != conversation_id:
-                    continue  # 跨会话旧情节不注入（改由 curator 语义召回负责）
-                summary = _injectable_memory(
-                    str(record.content.get("summary", "")))
-                norm = _normalize_summary(summary)
-                if not summary or not norm or norm in seen_norm:
-                    continue
-                seen_norm.add(norm)
-                memories.append(summary)
-                recent_this_conv += 1
-                if recent_this_conv >= 3:
-                    break
-            memories = memories[:8]
-        else:
-            # Legacy chat-only behavior kept for backwards compatibility; opt in
-            # to curated retrieval to avoid injecting raw transcripts by default.
-            memories = [
-                m for m in (
-                    _injectable_memory(str(r.content.get("summary", "")))
-                    for r in ctx.recent_episodes)
-                if m]
+        memory_context = build_memory_context(
+            curator=self.curator, query=original, recent_episodes=ctx.recent_episodes,
+            conversation_id=conversation_id, allowed_spaces=spaces,
+            now=memory_now)
+        owner_principal = getattr(context, "principal", None)
+        owner_id = (str(owner_principal.principal_id)
+                    if getattr(owner_principal, "is_owner", False)
+                    and not conversation_id.startswith("group:") else "")
+        if owner_id:
+            from whale_core.memory.emotion import EmotionMemory
+            from whale_core.memory.person_model import PersonModel
+            memory_context = memory_context.with_patterns(
+                EmotionMemory(self.store).relevant_patterns(owner_id, original)
+                + PersonModel(self.store).relevant_hints(owner_id, original))
 
         if exploration_owner and conversation_id:
             from whale_core.life.exploration_chat import (
@@ -331,7 +265,7 @@ class WhaleCompanion:
             exploration_context, exploration_candidates = build_exploration_context(
                 self.store, original)
             if exploration_context:
-                memories.append(exploration_context)
+                memory_context = memory_context.with_other(exploration_context)
 
         # 多轮历史：显式传 conversation_id 才启用（默认保持单轮行为，兼容旧调用方）。
         # G1：群会话改用时间线渲染——每条发言带「消息ID|发送者」归属标签，
@@ -357,7 +291,16 @@ class WhaleCompanion:
                     history = load_history(self.store, conversation_id)
                     if not followup:
                         append_user_message(self.store, conversation_id, original)
-        kwargs = {"persona": persona_text, "memories": memories, "history": history}
+        kwargs = {"persona": persona_text,
+                  "memories": memory_context.as_memories(), "history": history}
+        # Existing reply models still receive strings. The native model can
+        # also render facts and recent chat separately.
+        import inspect as _inspect_memory
+        try:
+            if "memory_context" in _inspect_memory.signature(self.model.reply).parameters:
+                kwargs["memory_context"] = memory_context
+        except (TypeError, ValueError):
+            pass
         if images:
             kwargs["images"] = images
         if location is not None:
@@ -391,6 +334,7 @@ class WhaleCompanion:
         # 发送侧的规划解析（沉默/分段）依赖原始标记，不能提前剥离。
         from whale_core.life.response_planner import clean_reply_text
         clean_response = clean_reply_text(response)
+        auto_job = False
         if exploration_owner and conversation_id and exploration_candidates:
             from whale_core.life.exploration_chat import maybe_remember_offer
             maybe_remember_offer(
@@ -431,6 +375,24 @@ class WhaleCompanion:
                                      extra={"conversation_id": conversation_id[:160],
                                             "layer": "episode"},
                                      space_id=target)
+                    if owner_id and not followup:
+                        from whale_core.memory.emotion import EmotionMemory, emotion_signal
+                        signal = emotion_signal(original)
+                        if signal is not None:
+                            EmotionMemory(self.store).record(
+                                owner_id, source_id=ep_key,
+                                conversation_id=conversation_id,
+                                emotion=signal[0], trigger=signal[1],
+                                need=signal[2], space_id=target)
+                        if target and self.memory_extractor is not None:
+                            from whale_core.memory.formation import enqueue
+                            auto_job = enqueue(
+                                self.store, owner_id=owner_id, space_id=target,
+                                source_id=ep_key, text=original) is not None
+                            from whale_core.memory.person_model import (
+                                enqueue_review_if_due, schedule_reviews)
+                            if enqueue_review_if_due(self.store, owner_id, target):
+                                schedule_reviews(self.store, self.memory_extractor)
         if conversation_id and clean_response and followup:
             # 并行链路第二条：并入同一轮的助手消息（不重复写用户原话）。
             from whale_core.memory.history import append_assistant_followup
@@ -443,6 +405,12 @@ class WhaleCompanion:
             # 只写会话作用域，不授任何权限；失败 fail-soft。
             _maybe_writeback_inner_state(
                 self.store, conversation_id=conversation_id, user_text=original)
+        if owner_id and not followup:
+            from whale_core.memory.emotion import EmotionMemory
+            EmotionMemory(self.store).review_if_due(owner_id)
+        if auto_job:
+            from whale_core.memory.formation import schedule
+            schedule(self.store, self.memory_extractor)
         return response
 
 class RealtimeTranscriptRecorder:

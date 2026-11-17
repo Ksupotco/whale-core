@@ -1000,6 +1000,21 @@ export interface MemorySubjects {
   legacy_unscoped_records: number;
 }
 
+export interface PortraitOwner {
+  owner_id: string;
+  events: Array<{
+    event_id: string; emotion: string; trigger: string; need: string;
+    occurred_at: string; source_id: string; source_text: string; feedback: string;
+    feedback_kind: string;
+  }>;
+  profiles: Array<{
+    item_id: string; kind: "interaction" | "interest";
+    context: string; need: string; effective_response: string;
+    expression_preference: string; topic: string; evidence_ids: string[];
+    inferred: boolean; active: boolean;
+  }>;
+}
+
 /** GET /studio/memory/browse 的记录行；metadata_only 时无 summary。 */
 export interface MemoryBrowseItem {
   key: string;
@@ -1014,10 +1029,25 @@ export interface MemoryBrowseItem {
   source_group: string;
   expires_at?: string | null;
   last_confirmed?: string | null;
+  family_id?: string;
+  correction_family_id?: string;
   summary?: string;
   source_message_ids?: string[];
   tags?: string[];
   restricted?: boolean;
+}
+
+export interface MemoryFactHistory {
+  key: string;
+  current_summary: string;
+  versions: Array<{
+    key: string; version: number; status: string; current: boolean;
+    summary?: string;
+    sources: Array<{ evidence_id: string; speaker_id: string;
+      occurred_at: string; quote: string }>;
+  }>;
+  operations: Array<{ action: string; reason: string; evidence_id: string;
+    recorded_at: string }>;
 }
 
 export interface MemoryBrowseResult {
@@ -1254,6 +1284,18 @@ export const studioApi = {
   memorySubjects: () =>
     request<MemorySubjects>("/studio/memory/subjects"),
 
+  memoryPortrait: async () =>
+    (await request<{ owners: PortraitOwner[] }>("/studio/memory/portrait")).owners,
+
+  changePortrait: (body: {
+    owner_id: string; action: "update" | "delete_profile" | "delete_event" | "update_event";
+    item_id?: string; event_id?: string; active?: boolean;
+    effective_response?: string; expression_preference?: string;
+    emotion?: string; trigger?: string; need?: string; context?: string; topic?: string;
+  }) => request<{ changed: boolean }>("/studio/memory/portrait", {
+    method: "POST", body: JSON.stringify(body),
+  }),
+
   memoryBrowse: (params: MemoryBrowseParams) => {
     const qs = new URLSearchParams();
     if (params.space_id) qs.set("space_id", params.space_id);
@@ -1282,6 +1324,10 @@ export const studioApi = {
         body: JSON.stringify({ key, new_summary: newSummary }),
       },
     ),
+
+  memoryHistory: (key: string) =>
+    request<MemoryFactHistory>(
+      `/studio/memory/history?key=${encodeURIComponent(key)}`),
 
   memoryExpire: (key: string) =>
     request<{ expired: boolean; key: string }>("/studio/memory/expire", {

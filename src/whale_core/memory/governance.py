@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
 
-from whale_core.memory.store import MemoryKind, MemoryStore
+from whale_core.memory.store import MemoryKind, MemoryRecord, MemoryStore
 
 GOVERNABLE_TAGS = ("chat", "call")  # 低价值情节的来源标签（curated 永不治理掉）
 PENDING_FACT_TTL_DAYS = 30
@@ -165,6 +165,87 @@ def supersede(store: MemoryStore, old_key: str, new_summary: str, *,
         new_summary, source=source, evidence_id=evidence_id,
         stable_fact=True, consent=True, space_id=old.space_id)
     return new.key
+
+
+def correct_legacy_record(store: MemoryStore, old_key: str,
+                          new_summary: str, *, source: str,
+                          key_prefix: str, registry=None) -> MemoryRecord:
+    """Correct an older episode/preference record as one versioned transaction."""
+    from dataclasses import replace
+    from uuid import uuid4
+    from whale_core.memory.relations import relation_hints
+
+    stamp = datetime.now(timezone.utc).isoformat()
+
+    def write(tx):
+        old = tx.get_record(old_key)
+        if old is None or "superseded" in old.tags:
+            raise KeyError(old_key)
+        family_id = str(old.content.get("correction_family_id") or uuid4().hex)
+        old_content = dict(old.content)
+        old_content.update({"layer": "superseded", "status": "superseded",
+                            "superseded_at": stamp, "valid_to": stamp,
+                            "correction_family_id": family_id})
+        new_key = f"{key_prefix}{uuid4().hex[:16]}"
+        old_content["superseded_by"] = new_key
+        tx.put_record(replace(old, content=old_content,
+                              tags=tuple(dict.fromkeys((*old.tags, "superseded")))))
+        new_content = dict(old.content)
+        new_content.update({
+            "summary": new_summary.strip(), "source": source,
+            "layer": str(old.content.get("layer") or ""),
+            "status": "active", "correction_family_id": family_id,
+            "correction_version": int(old.content.get("correction_version") or 1) + 1,
+            "corrected_from": old.key, "valid_from": stamp,
+            "last_confirmed": stamp, "source_message_ids": [],
+            "relations": list(relation_hints(new_summary)),
+        })
+        for field in ("superseded_at", "superseded_by", "valid_to"):
+            new_content.pop(field, None)
+        new = type(old)(kind=old.kind, key=new_key, content=new_content,
+                        tags=tuple(tag for tag in old.tags if tag != "superseded"),
+                        space_id=old.space_id)
+        tx.put_record(new)
+        return old, new
+
+    old, new = store.transact(write)
+    _purge_embedding(registry, str(old.content.get("summary") or ""))
+    return new
+
+
+def legacy_correction_history(store: MemoryStore, key: str, *,
+                              allowed_spaces) -> dict | None:
+    """Return versions of a legacy correction, scoped to the caller's space."""
+    target = store.get_record(key)
+    spaces = {str(getattr(space, "space_id", space)) for space in allowed_spaces}
+    if (target is None or target.space_id not in spaces
+            or not target.content.get("correction_family_id")):
+        return None
+    family_id = target.content["correction_family_id"]
+    records = [record for record in store.list_by_kind(
+        target.kind, space_ids=(target.space_id,))
+        if record.content.get("correction_family_id") == family_id]
+    records.sort(key=lambda record: int(record.content.get("correction_version") or 1))
+    versions = [{
+        "key": record.key,
+        "version": int(record.content.get("correction_version") or 1),
+        "summary": str(record.content.get("summary") or ""),
+        "status": "superseded" if "superseded" in record.tags else "active",
+        "current": "superseded" not in record.tags,
+        "sources": [{"evidence_id": str(item), "speaker_id": "",
+                     "occurred_at": record.created_at.isoformat(), "quote": ""}
+                    for item in (record.content.get("source_message_ids") or ())],
+    } for record in records]
+    current = next((row for row in reversed(versions) if row["current"]), None)
+    return {
+        "key": key, "family_id": family_id, "space_id": target.space_id,
+        "current_summary": current["summary"] if current else "",
+        "versions": versions,
+        "operations": [{"action": "update", "reason": "explicit_correction",
+                        "evidence_id": row["key"], "recorded_at":
+                        str(store.get_record(row["key"]).content.get("valid_from") or "")}
+                       for row in versions[1:]],
+    }
 
 
 def _purge_embedding(registry, text: str) -> None:

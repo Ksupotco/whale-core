@@ -247,8 +247,15 @@ class InMemoryStore:
             def get_record(self, key: str):
                 return store._records.get(key)
 
+            def list_records(self, kind: MemoryKind, space_id: str):
+                return [record for record in store._records.values()
+                        if record.kind is kind and record.space_id == space_id]
+
             def put_record(self, record: MemoryRecord) -> None:
                 store.put_record(record)
+
+            def delete_record(self, key: str) -> None:
+                store.delete(key)
 
         with self._lock:
             original_data = dict(self._data)

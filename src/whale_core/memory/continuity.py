@@ -65,7 +65,10 @@ def _summarize_persona(persona: PersonaContinuity | None) -> str:
 
 
 def _sorted_recent(records: Sequence[MemoryRecord], *, limit: int) -> tuple[MemoryRecord, ...]:
-    ordered = sorted(records, key=lambda r: r.created_at, reverse=True)
+    ordered = sorted(
+        (r for r in records if "superseded" not in r.tags
+         and r.content.get("status", "active") == "active"),
+        key=lambda r: r.created_at, reverse=True)
     return tuple(ordered[:limit])
 
 

@@ -22,6 +22,7 @@ from whale_core.api.studio.members import (
     _member_consent_revoke,
     _member_memory_correct,
     _member_memory_delete,
+    _member_memory_history,
     _member_memory_list,
 )
 from whale_core.api.studio.memory import (
@@ -38,12 +39,14 @@ from whale_core.api.studio.initiative import (
 )
 from whale_core.api.studio.memory_browse import (
     _browse as _memory_browse,
+    _history as _memory_history,
     _correct as _memory_correct,
     _delete as _memory_delete,
     _expire as _memory_expire,
     _pause as _memory_pause,
     _subjects as _memory_subjects,
 )
+from whale_core.api.studio.portrait import _list as _portrait_list, _change as _portrait_change
 from whale_core.api.studio.persona_evolution import (
     _evolution_decide, _evolution_propose,
     _evolution_rollback, _evolution_view,
@@ -123,8 +126,14 @@ def _dispatch_studio(handler, method: str, parts: list[str]) -> None:
         _put_channel(handler, ctx, svc)
     elif rest == ["memory", "subjects"] and method == "GET":
         _memory_subjects(handler, ctx, svc)
+    elif rest == ["memory", "portrait"] and method == "GET":
+        _portrait_list(handler, ctx, svc)
+    elif rest == ["memory", "portrait"] and method == "POST":
+        _portrait_change(handler, ctx, svc)
     elif rest == ["memory", "browse"] and method == "GET":
         _memory_browse(handler, ctx, svc)
+    elif rest == ["memory", "history"] and method == "GET":
+        _memory_history(handler, ctx, svc)
     elif rest == ["memory", "correct"] and method == "POST":
         _memory_correct(handler, ctx, svc)
     elif rest == ["memory", "expire"] and method == "POST":
@@ -179,6 +188,10 @@ def _dispatch_studio(handler, method: str, parts: list[str]) -> None:
         if method != "POST":
             raise StudioError(405, "method_not_allowed", "use POST")
         _member_memory_correct(handler, ctx, svc)
+    elif rest == ["members", "memory", "history"]:
+        if method != "GET":
+            raise StudioError(405, "method_not_allowed", "use GET")
+        _member_memory_history(handler, ctx, svc)
     elif rest == ["members", "memory", "delete"]:
         if method != "POST":
             raise StudioError(405, "method_not_allowed", "use POST")
@@ -197,8 +210,9 @@ def _path_known(rest: list[str]) -> bool:
                 ["forks"], ["forks", "preview"], ["vault", "records"],
                 ["members", "consent"], ["members", "consent", "revoke"],
                 ["members", "memory"], ["members", "memory", "correct"],
+                ["members", "memory", "history"],
                 ["members", "memory", "delete"],
-                ["memory", "subjects"], ["memory", "browse"],
+                ["memory", "subjects"], ["memory", "browse"], ["memory", "history"],
                 ["initiative"], ["initiative", "global"],
                 ["initiative", "channel"],
                 ["memory", "correct"], ["memory", "expire"],

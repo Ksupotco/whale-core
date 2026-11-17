@@ -95,12 +95,13 @@ class _ManagedModel:
     def __getattr__(self, name):
         return getattr(require_chat_model(self.registry), name)
 
-    def reply(self, text, **kwargs):
+    def reply(self, text, *, memory_context=None, **kwargs):
         model = require_chat_model(self.registry)
         # 预算预留先于真实调用：拿到名额后失败照样占额度（防重试风暴）。
         from whale_core.core.budget import reserve
         reserve(self.store, "model_calls")
-        return InstrumentedProvider('llm.chat', model, self.store).reply(text, **kwargs)
+        return InstrumentedProvider('llm.chat', model, self.store).reply(
+            text, memory_context=memory_context, **kwargs)
 
 
 # 分角色模型能力映射（设置页/环境变量可配；未配置的角色回落 llm.chat）
@@ -253,7 +254,10 @@ def assemble_runtime(
     tools.guard()
     managed_model = _ManagedModel(registry, store)
     from whale_core.memory.semantic import DynamicHybridCurator
-    companion = WhaleCompanion(store, managed_model, curator=DynamicHybridCurator(store, registry, base=MemoryCurator(store)))
+    companion = WhaleCompanion(
+        store, managed_model,
+        curator=DynamicHybridCurator(store, registry, base=MemoryCurator(store)),
+        memory_extractor=managed_model)
     # Explicit searches route to web.search; arbitrary LLM tool planning is opt-in.
     # Safe if no search provider is installed: runtime reports capability unavailable.
     llm_intent = env.get("WHALE_INTENT_MODEL_ENABLED", "") == "1"

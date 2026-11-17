@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from uuid import uuid4
 
 from whale_core.api.studio.services import StudioServices
 from whale_core.api.studio.shared import (
@@ -38,7 +37,10 @@ from whale_core.memory.consent import (
     ConsentError,
 )
 from whale_core.memory.extraction import contains_sensitive
-from whale_core.memory.governance import _purge_embedding, forget_gone_everywhere
+from whale_core.memory.facts import FactService
+from whale_core.memory.governance import (
+    correct_legacy_record, forget_gone_everywhere, legacy_correction_history,
+)
 from whale_core.memory.spaces import MemorySpaceError
 from whale_core.memory.store import MemoryKind
 
@@ -267,33 +269,40 @@ def _member_memory_correct(handler, ctx, svc: StudioServices) -> None:
                           "更正内容含敏感信息（手机号/证件/地址/凭据类），已拒绝")
     with ctx.lock:
         space_id, old = _member_record_for_write(ctx, svc, principal_id, key)
-        old_content = dict(old.content)
-        old_summary = str(old_content.get("summary") or "")
-        # 旧记录退出一切召回（superseded），新记录留在同一成员空间。
-        old_content["layer"] = "superseded"
-        old_content["superseded_at"] = _now_iso()
-        ctx.store.put_record(type(old)(
-            kind=old.kind, key=old.key, content=old_content,
-            record_id=old.record_id, created_at=old.created_at,
-            tags=tuple(set(old.tags) | {"superseded"}), space_id=old.space_id))
-        _purge_embedding(_plugin_registry(ctx), old_summary)
-        new_key = f"member-mem:corr-{uuid4().hex[:16]}"
-        new_content = dict(old.content)
-        new_content.update({
-            "summary": new_summary.strip()[:1500],
-            "source": "member-correct",
-            "layer": "member",
-            "corrected_from": old.key,
-            "last_confirmed": _now_iso(),
-        })
-        ctx.store.put_record(type(old)(
-            kind=old.kind, key=new_key, content=new_content,
-            tags=tuple(t for t in old.tags if t != "superseded"),
-            space_id=space_id))
+        try:
+            new = correct_legacy_record(
+                ctx.store, old.key, new_summary, source="member-correct",
+                key_prefix="member-mem:corr-", registry=_plugin_registry(ctx))
+        except KeyError:
+            raise StudioError(404, "not_found", "记录不存在或已更正") from None
+        new_key = new.key
         _audit(ctx, "member.memory.correct", principal_id=principal_id,
                old_key_tail=key[-8:], new_key_tail=new_key[-8:])
     handler._send(200, _ok({"corrected": True, "old_key": key,
                             "new_key": new_key}))
+
+
+def _member_memory_history(handler, ctx, svc: StudioServices) -> None:
+    """A member can inspect the correction chain only in their own space."""
+    try:
+        principal_id, _ = _require_member_actor(
+            ctx.store, handler.query.get("principal_id", [""])[0],
+            handler.query.get("actor_conversation_key", [""])[0])
+    except StudioError as exc:
+        _audit(ctx, "member.memory.history", outcome="denied", reason=exc.code)
+        raise
+    key = str(handler.query.get("key", [""])[0] or "").strip()
+    space_id, _ = _member_record_for_write(ctx, svc, principal_id, key)
+    history = FactService(ctx.store).history_for(
+        key, allowed_spaces=(space_id,))
+    if history is None:
+        history = legacy_correction_history(
+            ctx.store, key, allowed_spaces=(space_id,))
+    if history is None:
+        raise StudioError(404, "not_found", "这条记录没有更正链")
+    _audit(ctx, "member.memory.history", principal_id=principal_id,
+           key_tail=key[-8:])
+    handler._send(200, _ok(history))
 
 
 def _member_memory_delete(handler, ctx, svc: StudioServices) -> None:

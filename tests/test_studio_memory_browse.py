@@ -242,6 +242,47 @@ class TestGovernance:
             assert new.content["summary"] == "主人喜欢美式咖啡"
             assert new.content["corrected_from"] == "own:1"
             assert new.space_id == OWNER_SPACE
+            status, body = _req(server, "GET",
+                                "/api/v1/studio/memory/history?key=own:1")
+            assert status == 200
+            assert [row["summary"] for row in body["result"]["versions"]] == [
+                "主人喜欢黑咖啡", "主人喜欢美式咖啡"]
+            status, body = _req(server, "POST", "/api/v1/studio/memory/correct",
+                                body={"key": new_key,
+                                      "new_summary": "主人喜欢手冲咖啡"})
+            assert status == 200
+            status, history = _req(server, "GET",
+                                   "/api/v1/studio/memory/history?key=own:1")
+            assert status == 200
+            assert [row["version"] for row in history["result"]["versions"]] == [
+                1, 2, 3]
+            assert history["result"]["current_summary"] == "主人喜欢手冲咖啡"
+
+    def test_curated_fact_correction_uses_family_service_and_history(self):
+        from whale_core.memory.facts import FactService
+        from whale_core.memory.continuity import remember_episode
+
+        with _server() as (server, store):
+            remember_episode(store, summary="用户：我喜欢绿茶\nEnxi：好",
+                             key="ep:source", tags=("chat",), space_id=OWNER_SPACE)
+            facts = FactService(store)
+            old = facts.remember("用户自述：我喜欢绿茶", source="chat",
+                                 evidence_id="ep:source", space_id=OWNER_SPACE).record
+            status, body = _req(server, "POST", "/api/v1/studio/memory/correct",
+                                body={"key": old.key,
+                                      "new_summary": "用户自述：我喜欢红茶"})
+            assert status == 200
+            new = store.get_record(body["result"]["new_key"])
+            assert new.content["family_id"] == old.content["family_id"]
+            assert store.get_record(old.key).content["status"] == "superseded"
+            status, body = _req(server, "GET",
+                                f"/api/v1/studio/memory/history?key={old.key}")
+            assert status == 200
+            history = body["result"]
+            assert history["current_summary"] == "用户自述：我喜欢红茶"
+            assert history["versions"][0]["sources"][0]["quote"] == "我喜欢绿茶"
+            assert [row["action"] for row in history["operations"]] == [
+                "add", "update"]
 
     def test_expire_marks_record(self):
         with _server() as (server, store):

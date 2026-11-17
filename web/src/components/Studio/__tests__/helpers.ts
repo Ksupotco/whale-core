@@ -227,6 +227,7 @@ export function mockStudioFetch(
       jsonResult({ personas: structuredClone(FIXTURE.personas) }),
     "/studio/memory-spaces": () =>
       jsonResult({ memory_spaces: structuredClone(FIXTURE.spaces) }),
+    "/studio/memory/portrait": () => jsonResult({ owners: [] }),
     "/auth/temporary/codes": () => jsonResult({ codes: [] }),
     "/auth/temporary/grants": () => jsonResult({ grants: [] }),
     ...overrides,

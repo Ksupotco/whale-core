@@ -34,7 +34,10 @@ from whale_core.api.studio.shared import (
     _reject_unknown_fields,
     _require_json_body,
 )
-from whale_core.memory.governance import forget_gone_everywhere
+from whale_core.memory.governance import (
+    correct_legacy_record, forget_gone_everywhere, legacy_correction_history,
+)
+from whale_core.memory.facts import FactService, _active_fact
 from whale_core.memory.pause import PAUSED_PREFIX, is_recording_paused
 from whale_core.memory.spaces import MemorySpaceType
 from whale_core.memory.store import MemoryKind
@@ -203,6 +206,8 @@ def _record_row(ctx, svc: StudioServices, rec, *, metadata_only: bool) -> dict:
         "source_group": str(content.get("source_group") or ""),
         "expires_at": content.get("expires_at"),
         "last_confirmed": str(content.get("last_confirmed") or ""),
+        "family_id": str(content.get("family_id") or ""),
+        "correction_family_id": str(content.get("correction_family_id") or ""),
     }
     if metadata_only:
         # member_private：管理通道只见元数据（MEM-02/03，内容仅本人路径）
@@ -296,6 +301,20 @@ def _browse(handler, ctx, svc: StudioServices) -> None:
     }))
 
 
+def _history(handler, ctx, svc: StudioServices) -> None:
+    key = str(handler.query.get("key", [""])[0] or "").strip()
+    record = _record_for_owner_op(ctx, svc, key)
+    history = FactService(ctx.store).history_for(
+        record.key, allowed_spaces=(record.space_id,))
+    if history is None:
+        history = legacy_correction_history(
+            ctx.store, record.key, allowed_spaces=(record.space_id,))
+    if history is None:
+        raise StudioError(404, "not_found", "这条记录没有事实更正链")
+    _audit(ctx, "memory.history", key_tail=key[-8:], space_id=record.space_id)
+    handler._send(200, _ok(history))
+
+
 # ---------------------------------------------------------------- 治理操作
 
 
@@ -325,27 +344,23 @@ def _correct(handler, ctx, svc: StudioServices) -> None:
                           "new_summary 必须是 1..1500 字符的字符串")
     with ctx.lock:
         old = _record_for_owner_op(ctx, svc, key)
-        old_content = dict(old.content)
-        old_content["layer"] = "superseded"
-        old_content["superseded_at"] = _now_iso()
-        ctx.store.put_record(type(old)(
-            kind=old.kind, key=old.key, content=old_content,
-            record_id=old.record_id, created_at=old.created_at,
-            tags=tuple(set(old.tags) | {"superseded"}), space_id=old.space_id))
-        new_key = f"mem:corr-{uuid4().hex[:16]}"
-        new_content = dict(old.content)
-        new_content.update({
-            "summary": new_summary.strip(),
-            "source": "owner-correct",
-            "corrected_from": old.key,
-            "last_confirmed": _now_iso(),
-        })
-        new_content.pop("superseded_at", None)
-        new_content["layer"] = str(old.content.get("layer") or "")
-        ctx.store.put_record(type(old)(
-            kind=old.kind, key=new_key, content=new_content,
-            tags=tuple(t for t in old.tags if t != "superseded"),
-            space_id=old.space_id))
+        if _active_fact(old):
+            result = FactService(ctx.store).correct(
+                old.key, new_summary.strip(), source="studio-correction",
+                evidence_id=f"studio:correction:{uuid4().hex}")
+            _audit(ctx, "memory.correct", old_key_tail=key[-8:],
+                   new_key_tail=result.record.key[-8:], space_id=old.space_id)
+            handler._send(200, _ok({"corrected": True, "old_key": key,
+                                    "new_key": result.record.key}))
+            return
+        try:
+            new = correct_legacy_record(
+                ctx.store, old.key, new_summary, source="owner-correct",
+                key_prefix="mem:corr-",
+                registry=getattr(getattr(ctx, "manager", None), "registry", None))
+        except KeyError:
+            raise StudioError(404, "not_found", "记录不存在或已更正") from None
+        new_key = new.key
         _audit(ctx, "memory.correct", old_key_tail=key[-8:],
                new_key_tail=new_key[-8:], space_id=old.space_id)
     handler._send(200, _ok({"corrected": True, "old_key": key,

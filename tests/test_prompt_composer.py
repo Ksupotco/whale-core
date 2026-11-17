@@ -6,6 +6,7 @@ from whale_core.core.prompt_composer import (
     MAX_PERSONA_CHARS, MAX_MEMORY_CHARS, compose_companion_system,
     format_current_datetime, format_location_context,
 )
+from whale_core.memory.context import MemoryContext
 
 
 def test_no_builtin_identity_when_unconfigured():
@@ -35,6 +36,33 @@ def test_budget_and_empty_context():
     m = compose_companion_system(memories=["x" * (MAX_MEMORY_CHARS + 1000)])
     assert m.count("x") <= MAX_MEMORY_CHARS
     assert "背景记忆" not in compose_companion_system(memories=[])
+
+
+def test_structured_memory_keeps_facts_separate_from_recent_chat():
+    system = compose_companion_system(memory_context=MemoryContext(
+        facts=("用户喜欢科幻",), related=("上次讨论过太空歌剧",),
+        recent=("用户：最近看了三体",),
+        patterns=("讨论作品时，提出不同观点曾有效",)))
+    assert "相关事实：\n用户喜欢科幻" in system
+    assert "相关记忆：\n上次讨论过太空歌剧" in system
+    assert "本会话近期片段：\n用户：最近看了三体" in system
+    assert "相处偏好：\n讨论作品时，提出不同观点曾有效" in system
+    assert system.index("相关事实") < system.index("本会话近期片段")
+
+
+def test_structured_prompt_includes_boundary_access_and_state_evidence():
+    system = compose_companion_system(memory_context=MemoryContext(
+        boundaries=("A的身体细节不进群",),
+        access=("旧门码不能开门",),
+        constraints=("先联系A",),
+        statuses=("A关于芒果的旧事实已撤销",),
+        facts=("A偏好燕麦奶",)))
+    assert "当前披露边界：\nA的身体细节不进群" in system
+    assert "当前访问权限：\n旧门码不能开门" in system
+    assert "当前行为约束：\n先联系A" in system
+    assert "已核验事实状态：\nA关于芒果的旧事实已撤销" in system
+    assert system.index("当前披露边界") < system.index("相关事实")
+    assert "不能仅因本轮没有召回撤销记录" in system
 
 
 def test_current_datetime_injected_asia_shanghai():

@@ -99,6 +99,7 @@ class DeepSeekCompanion:
                 "configured": bool(self.api_key) or _is_local_or_private_http(self.base_url)}
 
     def reply(self, text: str, *, persona: str = "", memories: Sequence[str] = (),
+              memory_context=None,
               history: Sequence[Mapping[str, str]] = (),
               images: Sequence = (),
               location: str | None = None,
@@ -109,7 +110,8 @@ class DeepSeekCompanion:
         from whale_core.core.prompt_composer import compose_companion_system
         loc = location if location is not None else getattr(self, "default_location", None)
         system = compose_companion_system(
-            persona=persona, memories=memories, location=loc)
+            persona=persona, memories=memories, memory_context=memory_context,
+            location=loc)
         clean_history = [{"role": m["role"], "content": m["content"][:2000]}
                          for m in list(history)[-12:] if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)]
         # 附带图片时用户消息转多模态 parts（OpenAI image_url data URI 形态）。

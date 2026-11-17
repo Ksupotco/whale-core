@@ -100,6 +100,76 @@ def test_curated_fact_ranks_before_episodes():
     assert any("吃香菜面" in m for m in memories)
 
 
+def test_native_reply_gets_separate_fact_and_recent_context():
+    class ContextBrain(FakeBrain):
+        def reply(self, text, *, persona="", memories=(), history=(),
+                  memory_context=None):
+            self.context = memory_context
+            return super().reply(text, persona=persona, memories=memories,
+                                 history=history)
+
+    store, brain = InMemoryStore(), ContextBrain()
+    curator = MemoryCurator(store)
+    curator.remember("用户喜欢科幻", source="qq:owner", evidence_id="m0",
+                     stable_fact=True, consent=True)
+    companion = WhaleCompanion(store, brain, curator=curator)
+    companion.chat("聊聊科幻", conversation_id="c")
+    companion.chat("刚才说的科幻", conversation_id="c")
+
+    assert brain.context.facts == ("用户喜欢科幻",)
+    assert any("聊聊科幻" in item for item in brain.context.recent)
+    assert brain.calls[-1]["memories"] == list(brain.context.as_memories())
+
+
+def test_many_recalled_facts_leave_room_for_current_conversation():
+    class ContextBrain(FakeBrain):
+        def reply(self, text, *, persona="", memories=(), history=(),
+                  memory_context=None):
+            self.context = memory_context
+            return super().reply(text, persona=persona, memories=memories,
+                                 history=history)
+
+    store, brain = InMemoryStore(), ContextBrain()
+    curator = MemoryCurator(store)
+    for index in range(10):
+        curator.remember(
+            f"用户喜欢科幻作品系列{index}", source="qq:owner",
+            evidence_id=f"fact:{index}", stable_fact=True, consent=True)
+    companion = WhaleCompanion(store, brain, curator=curator)
+    companion.chat("我们刚聊到星舰设定", conversation_id="c")
+    companion.chat("接着说科幻", conversation_id="c")
+
+    assert brain.context.facts
+    assert any("星舰设定" in item for item in brain.context.recent)
+    assert len(brain.context.facts + brain.context.related + brain.context.recent) <= 8
+
+
+def test_managed_chat_model_keeps_structured_context(monkeypatch):
+    from whale_core.profiles import _ManagedModel
+
+    class Registry:
+        def __init__(self, model):
+            self.model = model
+
+        def providers_for(self, capability):
+            return [("test", self.model)] if capability == "llm.chat" else []
+
+    class ContextBrain(FakeBrain):
+        def reply(self, text, *, persona="", memories=(), history=(),
+                  memory_context=None):
+            self.context = memory_context
+            return super().reply(text, persona=persona, memories=memories,
+                                 history=history)
+
+    monkeypatch.setattr("whale_core.core.budget.reserve", lambda *args: None)
+    store, brain = InMemoryStore(), ContextBrain()
+    model = _ManagedModel(Registry(brain), store)
+    WhaleCompanion(store, model, curator=MemoryCurator(store)).chat(
+        "聊聊科幻", conversation_id="c")
+    assert brain.context is not None
+    assert brain.context.as_memories() == tuple(brain.calls[0]["memories"])
+
+
 # ---------- QqInboundWorkflow：会话接入 + 记忆指令 ----------
 
 def test_workflow_passes_conversation_id_to_companion():

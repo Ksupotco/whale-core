@@ -98,6 +98,21 @@ def test_return_value_and_kwargs_passthrough():
     assert seen["history"] == ({"role": "user", "content": "之前"},)
 
 
+def test_optional_memory_context_reaches_supporting_model():
+    class ContextProvider:
+        def reply(self, text, *, persona="", memories=(), history=(),
+                  memory_context=None):
+            self.seen = memory_context
+            return "好"
+
+    from whale_core.memory.context import MemoryContext
+    inner = ContextProvider()
+    context = MemoryContext(facts=("用户喜欢科幻",))
+    wrapped = InstrumentedProvider("context", inner, InMemoryStore())
+    assert wrapped.reply("聊聊", memory_context=context) == "好"
+    assert inner.seen is context
+
+
 # ---------- 失败统计 ----------
 
 def test_model_error_recorded_and_reraised():

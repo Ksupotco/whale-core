@@ -65,6 +65,23 @@ def _fake() -> FakeEmbedder:
     })
 
 
+def test_reply_selection_keeps_distinct_boundary_among_similar_rules():
+    store = InMemoryStore()
+    curator = MemoryCurator(store)
+    for index, summary in enumerate((
+        "包裹放玄关鞋柜一层", "包裹放玄关鞋柜上面",
+        "包裹放玄关鞋柜旁边", "包裹不要放门口", "门口跑步",
+    )):
+        curator.remember(summary, source="chat", evidence_id=str(index),
+                         stable_fact=True, consent=True)
+    query = "包裹放玄关鞋柜还是门口"
+    for retriever in (curator, HybridCurator(store)):
+        summaries = [hit.record.content["summary"] for hit in
+                     retriever.recall(query, limit=3)]
+        assert "包裹不要放门口" in summaries
+        assert "门口跑步" not in summaries
+
+
 # ---------- cosine ----------
 
 def test_cosine_identical_is_one():

@@ -12,11 +12,13 @@ import {
   ApiError,
   studioApi,
   type MemoryBrowseItem,
+  type MemoryFactHistory,
   type MemoryBrowseResult,
   type MemoryHit,
   type MemoryMemberSubject,
   type MemorySpaceSubject,
   type MemorySubjects,
+  type PortraitOwner,
 } from "../api";
 
 /** 当前选中的浏览主体：空间直选 或 群友（按 principal_id）。 */
@@ -87,6 +89,35 @@ export default function MemoryView() {
   const [reloadKey, setReloadKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [portrait, setPortrait] = useState<PortraitOwner[]>([]);
+  const [history, setHistory] = useState<MemoryFactHistory | null>(null);
+  const [historyKey, setHistoryKey] = useState("");
+
+  const showHistory = async (key: string) => {
+    if (historyKey === key) {
+      setHistoryKey("");
+      setHistory(null);
+      return;
+    }
+    try {
+      setHistory(await studioApi.memoryHistory(key));
+      setHistoryKey(key);
+    } catch (e) { setError(friendlyError(e)); }
+  };
+
+  const loadPortrait = useCallback(async () => {
+    try { setPortrait(await studioApi.memoryPortrait()); }
+    catch (e) { setError(friendlyError(e)); }
+  }, []);
+
+  useEffect(() => { void loadPortrait(); }, [loadPortrait]);
+
+  const changePortrait = async (body: Parameters<typeof studioApi.changePortrait>[0]) => {
+    try {
+      await studioApi.changePortrait(body);
+      await loadPortrait();
+    } catch (e) { setError(friendlyError(e)); }
+  };
 
   // ---- 高级区：全局关键词搜索（旧版行为保留） ----
   const [advQ, setAdvQ] = useState("");
@@ -387,6 +418,9 @@ export default function MemoryView() {
         </div>
         {!metaOnly && (
           <div className="actions">
+            {(it.family_id || it.correction_family_id) && <button onClick={() => void showHistory(it.key)}>
+              {historyKey === it.key ? "收起来源" : "来源与更正"}
+            </button>}
             <button onClick={() => void correct(it)}>纠错</button>
             <button onClick={() => void expire(it.key)}>标记过期</button>
             <button className="danger" onClick={() => void remove(it.key)}>
@@ -394,6 +428,20 @@ export default function MemoryView() {
             </button>
           </div>
         )}
+        {historyKey === it.key && history && <div className="memory-history">
+          <p>当前事实：{history.current_summary || "已失效"}</p>
+          <ul>{history.versions.map((version) => <li key={version.key}>
+            第 {version.version} 版 · {version.status}
+            {version.summary && <div>{version.summary}</div>}
+            {version.sources.map((source) => <div key={source.evidence_id}>
+              来源 {source.evidence_id} · {source.speaker_id}
+              {source.occurred_at && ` · ${fmtTime(source.occurred_at)}`}
+              {source.quote && <blockquote>{source.quote}</blockquote>}
+            </div>)}
+          </li>)}</ul>
+          <p>操作：{history.operations.map((op) =>
+            `${op.action}（${op.evidence_id}，${fmtTime(op.recorded_at)}）`).join(" → ")}</p>
+        </div>}
       </li>
     );
   };
@@ -407,6 +455,61 @@ export default function MemoryView() {
 
       {error && <div className="banner error">{error}</div>}
       {notice && <div className="banner ok">{notice}</div>}
+
+      <section className="memory-browse" aria-label="情绪与画像">
+        <h3>情绪与画像</h3>
+        {portrait.length === 0 && <p className="muted small">暂无情绪事件或画像。</p>}
+        {portrait.map((owner) => <div key={owner.owner_id}>
+          <p className="muted small">主体：{owner.owner_id}</p>
+          <h4>相处画像</h4>
+          {owner.profiles.length === 0 && <p className="muted small">尚未形成画像。</p>}
+          <ul className="subject-list">{owner.profiles.map((item) => <li key={item.item_id}>
+            <strong>{item.kind === "interest" ? `可能喜欢：${item.topic}` : `${item.context}：${item.need}`}</strong>
+            {item.kind === "interaction" && <span> · 有效回应：{item.effective_response} · 表达：{item.expression_preference || "未确定"}</span>}
+            <span className="muted small"> · 推测 · {item.active ? "生效" : "已暂停"} · 依据 {item.evidence_ids.join("、")}</span>
+            <div className="actions">
+              <button onClick={() => void changePortrait({owner_id: owner.owner_id, action: "update", item_id: item.item_id, active: !item.active})}>{item.active ? "暂停" : "恢复"}</button>
+              <button onClick={() => {
+                const value = window.prompt("情境或兴趣线索", item.context);
+                if (value !== null && value.trim()) void changePortrait({owner_id: owner.owner_id, action: "update", item_id: item.item_id, context: value.trim()});
+              }}>更正情境</button>
+              {item.kind === "interest" && <button onClick={() => {
+                const value = window.prompt("可能兴趣", item.topic);
+                if (value !== null && value.trim()) void changePortrait({owner_id: owner.owner_id, action: "update", item_id: item.item_id, topic: value.trim()});
+              }}>更正兴趣</button>}
+              {item.kind === "interaction" && <button onClick={() => {
+                const value = window.prompt("当时需要什么", item.need);
+                if (value !== null) void changePortrait({owner_id: owner.owner_id, action: "update", item_id: item.item_id, need: value});
+              }}>更正需求</button>}
+              {item.kind === "interaction" && <button onClick={() => {
+                const value = window.prompt("有效回应", item.effective_response);
+                if (value !== null) void changePortrait({owner_id: owner.owner_id, action: "update", item_id: item.item_id, effective_response: value});
+              }}>更正回应</button>}
+              {item.kind === "interaction" && <button onClick={() => {
+                const value = window.prompt("表达偏好", item.expression_preference);
+                if (value !== null) void changePortrait({owner_id: owner.owner_id, action: "update", item_id: item.item_id, expression_preference: value});
+              }}>更正表达</button>}
+              <button className="danger" onClick={() => void changePortrait({owner_id: owner.owner_id, action: "delete_profile", item_id: item.item_id})}>删除</button>
+            </div>
+          </li>)}</ul>
+          <h4>近期情绪事件</h4>
+          <ul className="subject-list">{owner.events.map((event) => <li key={event.event_id}>
+            <strong>{event.emotion}</strong> · {event.trigger || "未标注情境"} · {fmtTime(event.occurred_at)}
+            <span className="muted small"> · {event.need || "需求未确定"} · {event.feedback_kind === "implicit" ? "反馈推测" : event.feedback || "尚无反馈"} · 来源 {event.source_id}</span>
+            {event.source_text && <details><summary>查看来源</summary><p>{event.source_text}</p></details>}
+            <div className="actions">
+              <button onClick={() => {
+                const value = window.prompt("情绪、情境、需求（用逗号分隔）", `${event.emotion},${event.trigger},${event.need}`);
+                if (value !== null) {
+                  const [emotion, trigger, need] = value.split(",").map((part) => part.trim());
+                  if (emotion) void changePortrait({owner_id: owner.owner_id, action: "update_event", event_id: event.event_id, emotion, trigger: trigger || "", need: need || ""});
+                }
+              }}>更正</button>
+              <button className="danger" onClick={() => void changePortrait({owner_id: owner.owner_id, action: "delete_event", event_id: event.event_id})}>删除</button>
+            </div>
+          </li>)}</ul>
+        </div>)}
+      </section>
 
       {subjectsLoading && !subjects && (
         <p className="muted">正在加载主体总览…</p>

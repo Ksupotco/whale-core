@@ -7,10 +7,12 @@ docs/archive/2026-10-30/gap-analysis-2026-10-30.md §4 R4）；证据链指向�
 from __future__ import annotations
 
 from whale_core.memory.curation import MemoryCurator
+from whale_core.memory.facts import FactService
 from whale_core.memory.store import MemoryStore
 
 REMEMBER_PREFIXES: tuple[str, ...] = ("记住：", "记住:", "记住 ")
 FORGET_PREFIXES: tuple[str, ...] = ("忘掉：", "忘掉:", "忘记：", "忘记:", "忘掉 ", "忘记 ")
+CORRECT_PREFIXES: tuple[str, ...] = ("更正：", "更正:", "更正 ")
 
 
 def handle_memory_command(
@@ -37,6 +39,7 @@ def handle_memory_command(
     if not text:
         return None
     cur = curator or MemoryCurator(store)
+    facts = FactService(store)
     for prefix in REMEMBER_PREFIXES:
         if text.startswith(prefix):
             fact = text[len(prefix):].strip()
@@ -45,27 +48,47 @@ def handle_memory_command(
             # 主体归属（生产实证 2026-11-01：裸文本「我最喜欢的…」被模型
             # 误读成鲸鱼自己的偏好）。摘要带说话人，模型才能正确归因。
             summary = f"用户自述：{fact}"
-            # 同空间内同义去重（同一事实不重复建档）
-            existing = cur.recall(fact, limit=3, allowed_spaces=allowed_spaces)
-            for hit in existing:
-                old = str(hit.record.content.get("summary", ""))
-                if old.removeprefix("用户自述：").strip() == fact:
-                    return f"这个我记着呢：{fact[:50]}"
-            cur.remember(
-                summary, source=source, evidence_id=evidence_id,
-                importance=0.8, confidence=1.0, stable_fact=True, consent=True,
-                space_id=space_id,
-            )
+            result = facts.remember(
+                summary, source=source, evidence_id=evidence_id, space_id=space_id)
+            if result.action == "preserve":
+                return f"这个我记着呢：{fact[:50]}"
             return f"好，我记住啦：{fact[:50]}"
+    for prefix in CORRECT_PREFIXES:
+        if text.startswith(prefix):
+            body = text[len(prefix):].strip()
+            separator = next((mark for mark in ("->", "→", "改成", "改为")
+                              if mark in body), "")
+            if not separator:
+                return "请写成：更正：旧内容 -> 新内容"
+            old, new = (part.strip() for part in body.split(separator, 1))
+            if not old or not new:
+                return "请写成：更正：旧内容 -> 新内容"
+            target = facts.find_exact(
+                f"用户自述：{old}", allowed_spaces=allowed_spaces)
+            if target is None:
+                return "没有找到要更正的记忆诶"
+            result = facts.correct(
+                target.key, f"用户自述：{new}",
+                source=source, evidence_id=evidence_id)
+            if result.action == "preserve":
+                return f"这个我记着呢：{new[:50]}"
+            return f"已更正：{new[:50]}"
     for prefix in FORGET_PREFIXES:
         if text.startswith(prefix):
             clue = text[len(prefix):].strip()
             if not clue:
                 return "想让我忘掉什么？"
+            from whale_core.memory.formation import cancel_pending
+            cancelled = cancel_pending(
+                store, clue, allowed_spaces=allowed_spaces)
             from whale_core.core.companion import _recall
             hits = _recall(cur, clue, allowed_spaces, limit=1)
-            if hits and cur.forget(hits[0].record.key):
+            if hits and (facts.forget(hits[0].record.key)
+                         if hits[0].record.content.get("stable_fact")
+                         else cur.forget(hits[0].record.key)):
                 summary = str(hits[0].record.content.get("summary", ""))
                 return f"已忘掉：{summary[:50]}"
+            if cancelled:
+                return "已忘掉待写入的记忆"
             return "没有找到相关的记忆诶"
     return None
