@@ -6,7 +6,8 @@ and validity checks. It adds task coverage, scoped boundaries, and a small
 context-aware reranker. It does not add contact transcript import, a cloud
 embedding provider, or a Cross-Encoder.
 
-Local owner-fact, worker, companion, and activation tests: **155 passed**.
+Local owner-fact, worker, host integration, companion, and activation tests:
+**171 passed**.
 The tests caught a regression where an explicit question such as “香菜的事还记得吗”
 lost the relevant curated fact; the branch now preserves a single distinctive
 term match for explicit recall requests.
