@@ -937,12 +937,22 @@ def build_delegates(env: dict, *, brain_factory=None, quick_brain_factory=None,
             reply, _timing = chat_with_context(text, conversation_id)
             return reply
 
+        try:
+            _bg_timeout = float(env.get("WHALE_AGENT_BG_TIMEOUT_S") or 0) or None
+        except (TypeError, ValueError):
+            _bg_timeout = None
+
         agent = GlassesAgent(
             store=store,
             chat=_agent_chat,
             workspace=_AgentPath(cfg.store_path).parent / "workspace",
+            # 软限转后台的结果经统一投递链路推送（QQ/通知/补传口径不变）
+            deliver=lambda text, session_id: deliver_result(
+                [{"kind": "text", "text": text}],
+                summary=f"glasses:agent:{str(session_id)[:8]}"),
             self_modifier=SelfModifier(
-                (env.get("WHALE_AGENT_REPO") or "").strip() or os.getcwd()),
+                (env.get("WHALE_AGENT_REPO") or "").strip() or os.getcwd(),
+                test_timeout_s=_bg_timeout),
             env=env)
     except Exception as exc:  # noqa: BLE001 — agent 装配失败不阻止主服务
         print(f"[glasses] agent not wired: {type(exc).__name__}", flush=True)

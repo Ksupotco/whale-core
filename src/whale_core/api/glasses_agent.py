@@ -527,6 +527,12 @@ class GlassesAgent:
             except Exception as exc:  # noqa: BLE001 — 回合故障不炸连接
                 box["resp"] = self._response(
                     session_id, f"回合内部故障：{type(exc).__name__}。")
+                try:
+                    self._audit(session_id, kind, summary, "fail",
+                                type(exc).__name__, turn_class="interactive",
+                                started=started)
+                except Exception:
+                    pass
             finally:
                 done.set()
 
