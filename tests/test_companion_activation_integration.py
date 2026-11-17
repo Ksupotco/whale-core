@@ -1,5 +1,7 @@
 """Reply assembly uses activation after source-specific retrieval checks."""
 
+from dataclasses import replace
+
 from whale_core.core.companion import WhaleCompanion
 from whale_core.memory.curation import MemoryCurator
 from whale_core.memory.store import InMemoryStore
@@ -44,4 +46,38 @@ def test_group_reply_cannot_activate_other_groups_curated_memory():
     WhaleCompanion(store, brain, curator=curator).chat(
         "群里有人问我的身体怎么样", conversation_id="group:two",
         allowed_spaces=("group:two",), episodic=False)
+    assert all("健康细节" not in item for item in brain.memories)
+
+
+def test_applicable_boundary_survives_crowded_fact_recall():
+    store = InMemoryStore()
+    curator = MemoryCurator(store)
+    curator.remember("不要在群里透露我的健康细节", source="test",
+                     evidence_id="privacy", consent=True,
+                     importance=0.1, stable_fact=True, space_id="group:one")
+    for index in range(20):
+        curator.remember(f"群里有人问我的身体怎么样，第{index}次随口聊过天气",
+                         source="test", evidence_id=f"noise-{index}",
+                         consent=True, importance=1.0, stable_fact=True,
+                         space_id="group:one")
+    brain = CaptureBrain()
+    WhaleCompanion(store, brain, curator=curator).chat(
+        "群里有人问我的身体怎么样", conversation_id="group:one",
+        allowed_spaces=("group:one",), episodic=False)
+    assert any("不要在群里透露我的健康细节" in item
+               for item in brain.memories)
+
+
+def test_revoked_boundary_never_reenters_through_normal_recall():
+    store = InMemoryStore()
+    curator = MemoryCurator(store)
+    record = curator.remember("不要在群里透露我的健康细节", source="test",
+                              evidence_id="privacy", consent=True,
+                              stable_fact=True, space_id="group:one")
+    store.put_record(replace(record, content={**record.content,
+                                              "status": "revoked"}))
+    brain = CaptureBrain()
+    WhaleCompanion(store, brain, curator=curator).chat(
+        "群里有人问我的身体怎么样", conversation_id="group:one",
+        allowed_spaces=("group:one",), episodic=False)
     assert all("健康细节" not in item for item in brain.memories)

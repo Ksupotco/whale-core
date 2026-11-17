@@ -7,10 +7,17 @@ context-aware reranker. It does not add contact transcript import, a cloud
 embedding provider, or a Cross-Encoder.
 
 Local owner-fact, worker, host integration, companion, and activation tests:
-**173 passed**.
+**175 passed**.
 The tests caught a regression where an explicit question such as “香菜的事还记得吗”
 lost the relevant curated fact; the branch now preserves a single distinctive
 term match for explicit recall requests.
+An additional product regression showed that a relevant disclosure boundary
+could be crowded out by the ordinary recall limit. The reply path now reads
+current curated rules separately within the resolved memory spaces. A revoked
+rule is filtered from both this scoped read and normal curated recall; selected
+rules carry an explicit context label. This change did not alter the synthetic
+gold-pool diagnostic scores because those pools are small, but it prevents
+crowded recall and revoked-state leakage in product integration tests.
 
 An offline TimlMemBench diagnostic supplies *gold current-state candidates*
 directly to the activation gate, without testing writing, retrieval, or the

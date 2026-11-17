@@ -88,6 +88,47 @@ def _spaces_include_vault(spaces) -> bool:
     except Exception:
         return False
 
+
+def _reply_current_record(record, now: datetime) -> bool:
+    from whale_core.memory.curation import _is_expired
+
+    return ("superseded" not in record.tags
+            and record.content.get("status", "active") in {"active", "accepted"}
+            and not _is_expired(record.content, now))
+
+
+def _scoped_curated_rule_candidates(curator, spaces):
+    """Read current rules within resolved spaces, outside ordinary recall Top-K."""
+    if spaces is None or not hasattr(curator, "store"):
+        return ()
+    from whale_core.memory.activation import MemoryCandidate
+    from whale_core.memory.curation import _space_ids
+    from whale_core.memory.roles import memory_role
+    from whale_core.memory.store import MemoryKind
+
+    space_ids = _space_ids(spaces)
+    if not space_ids:
+        return ()
+    now = datetime.now(timezone.utc)
+    records = (
+        curator.store.list_by_kind(
+            MemoryKind.PREFERENCE, space_ids=space_ids,
+            include_protected=_spaces_include_vault(spaces))
+        + curator.store.list_by_kind(
+            MemoryKind.EPISODE, space_ids=space_ids,
+            include_protected=_spaces_include_vault(spaces)))
+    out = []
+    for record in records:
+        if "curated" not in record.tags or not _reply_current_record(record, now):
+            continue
+        summary = str(record.content.get("summary") or "").strip()
+        if memory_role(summary) not in {"boundary", "access_permission", "constraint"}:
+            continue
+        out.append(MemoryCandidate(
+            key=record.key, summary=summary, score=0.0, source="curated",
+            subject_id=str(record.content.get("subject_id") or "owner")))
+    return tuple(out)
+
 def _writeback_enabled() -> bool:
     import os
     raw = (os.environ.get("WHALE_INNER_STATE_WRITEBACK") or "1").strip().lower()
@@ -364,6 +405,8 @@ class WhaleCompanion:
             for hit in _recall(self.curator, original, spaces,
                                include_protected=_spaces_include_vault(spaces),
                                limit=12):
+                if not _reply_current_record(hit.record, datetime.now(timezone.utc)):
+                    continue
                 piece = _injectable_memory(
                     str(hit.record.content.get("summary", "")))
                 if piece:
@@ -371,6 +414,7 @@ class WhaleCompanion:
                         key=hit.record.key, summary=piece, score=float(hit.score),
                         source="curated",
                         subject_id=str(hit.record.content.get("subject_id") or "owner")))
+            candidates.extend(_scoped_curated_rule_candidates(self.curator, spaces))
             memories = []
             seen_norm = set()
             owner_used = 0
@@ -385,6 +429,12 @@ class WhaleCompanion:
                     piece = f"长期记忆（用户自述）：{item.summary}"
                 else:
                     piece = item.summary
+                if selected.decision == "CONSTRAIN":
+                    label = {"disclosure_boundary": "当前披露边界",
+                             "access_permission": "当前访问权限",
+                             "behavior_constraint": "当前行为约束"}.get(
+                                 selected.reason, "当前约束")
+                    piece = f"[{label}] {piece}"
                 norm = _norm_mem(item.summary)
                 if norm and norm not in seen_norm:
                     seen_norm.add(norm)
