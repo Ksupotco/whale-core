@@ -111,7 +111,7 @@ def test_stranger_when_no_interactions(env):
     assert state.shared_topics == ()
     assert state.address_as == ""
     assert "陌生" in state.render()
-    assert "不假装熟悉" in state.render()
+    assert "自然处着就好" in state.render()
 
 
 def test_acquainted_after_few_group_interactions(env):

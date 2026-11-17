@@ -68,7 +68,7 @@ def test_s01_acquainted_stranger_probe():
     assert probe.familiarity == "stranger"
     assert probe.interaction_count == 0
     assert "陌生人" in probe.relationship_render
-    assert "不假装熟悉" in probe.relationship_render
+    assert "自然处着就好" in probe.relationship_render
 
 
 def test_s02_familiar_member():

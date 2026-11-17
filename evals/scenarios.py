@@ -118,7 +118,7 @@ class ProbeExpect:
     sender_id: str
     conversation_id: str
     familiarity: str = "stranger"
-    render_include: Tuple[str, ...] = ("陌生人", "不假装熟悉")
+    render_include: Tuple[str, ...] = ("陌生人", "自然处着就好")
     no_intimacy: bool = True
 
 
@@ -305,8 +305,8 @@ S04_NOVICE_HELP = Scenario(
             self_facts_empty=True,  # MEM-03：群聊关系视图不含任何私人记忆
             policy_skill="unknown",  # 群里读不到私聊自述 → 不脑补技能
             policy_flags=(("anxious", True), ("confirm_data_safety", True),
-                          ("one_step_at_a_time", True)),
-            policy_render_include=("一次只给一个问题或一个可执行步骤", "保存", "风险"),
+                          ("one_step_at_a_time", False)),  # 2026-11-17：焦虑不再触发慢滴灌
+            policy_render_include=("保存", "风险", "贴合具体处境"),
             policy_render_exclude=("大白话",),
             no_intimacy=True,
         ),

@@ -125,7 +125,7 @@ class RelationshipState:
         if self.familiarity == "stranger":
             return (
                 f"关系：与这位用户是陌生人（尚无互动记录）。"
-                "保持礼貌与分寸，不假装熟悉、不制造亲昵。"
+                "还不熟，自然处着就好。"
             )
         parts = [f"关系：{self.label}（有 {self.interaction_count} 次互动记录）。"]
         if self.recent_7d:
@@ -136,8 +136,7 @@ class RelationshipState:
             parts.append(f"对方自述可以称呼：{self.address_as}。")
         if self.boundaries:
             parts.append("对方自述的边界：" + "；".join(self.boundaries) + "。")
-        parts.append("以上只来自已授权的互动记录与本人自述，"
-                     "不要表现得比实际更熟。")
+        parts.append("以上只来自已授权的互动记录与本人自述。")
         return "\n".join(parts)
 
 

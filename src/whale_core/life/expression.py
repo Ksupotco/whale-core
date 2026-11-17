@@ -95,7 +95,7 @@ class ExpressionPolicy:
                 "安慰要贴合具体处境，不要机械复读「别慌」「深呼吸」。")
         if self.one_step_at_a_time:
             lines.append(
-                "一次只给一个问题或一个可执行步骤，确认对方跟上再继续。")
+                "对方是新手：一次只给一个问题或一个可执行步骤，跟上再继续。")
         if self.confirm_data_safety:
             lines.append(
                 "涉及可能丢失数据的操作（如强制关机/重启）前，先确认对方是否已"
@@ -174,8 +174,9 @@ def derive_policy(
     else:
         depth = "normal"
 
-    # 一次一个步骤：新手或焦虑者（客服式修复 §6.2）。
-    one_step = skill == "novice" or anxious
+    # 一次一个步骤：仅新手（2026-11-17 起焦虑不再触发——群里玩梗
+    # 「完蛋/怎么办」是常态，客服式慢滴灌毁气氛；新手教学才需要它）。
+    one_step = skill == "novice"
     if one_step:
         reasons.append("one_step")
 
