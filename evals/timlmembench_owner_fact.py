@@ -166,7 +166,8 @@ class OwnerFactAdapter:
         extractor = OwnerFactExtractor(ExtractionModel(self.client), timeout_s=25)
         contact_extractor = OwnerFactExtractor(
             ExtractionModel(self.client), timeout_s=25,
-            prompt_template=CONTACT_PROMPT_TEMPLATE)
+            prompt_template=CONTACT_PROMPT_TEMPLATE,
+            allow_rule_kind_aliases=True)
         self.contact_service = ContactFactService(self.store, self.authority,
                                                   contact_extractor)
         self.companion = WhaleCompanion(

@@ -132,7 +132,9 @@ def test_rule_kind_alias_keeps_valid_quote():
 
     evidence = UserEvidence("e1", "B", "B:qq", "private:A-B", "qq",
                             "owner-working", "别用旧码", datetime.now(timezone.utc))
-    candidates = OwnerFactExtractor(Model()).extract(evidence, ())
+    assert OwnerFactExtractor(Model()).extract(evidence, ()) == ()
+    candidates = OwnerFactExtractor(Model(), allow_rule_kind_aliases=True).extract(
+        evidence, ())
     assert len(candidates) == 1 and candidates[0].kind is FactKind.FACT
 
 

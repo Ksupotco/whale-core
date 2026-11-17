@@ -155,6 +155,7 @@ class OwnerFactExtractor:
         max_existing: int = MAX_EXISTING_FACTS,
         timeout_s: float = 10.0,
         prompt_template: str = _PROMPT_TEMPLATE,
+        allow_rule_kind_aliases: bool = False,
     ) -> None:
         self._model = model
         self._max_candidates = max(1, int(max_candidates))
@@ -163,6 +164,7 @@ class OwnerFactExtractor:
         self._max_existing = max(0, int(max_existing))
         self._timeout = float(timeout_s)
         self._prompt_template = prompt_template
+        self._allow_rule_kind_aliases = allow_rule_kind_aliases
 
     def extract(
         self,
@@ -197,7 +199,8 @@ class OwnerFactExtractor:
         # 合法空候选：正常完成，不重试（不为空闲聊浪费模型调用）
         out: list[FactCandidate] = []
         for item in items[: self._max_candidates]:
-            cand = _build_candidate(item, evidence)
+            cand = _build_candidate(
+                item, evidence, allow_rule_kind_aliases=self._allow_rule_kind_aliases)
             if cand is not None:
                 out.append(cand)
         return tuple(out)
@@ -218,7 +221,8 @@ def _parse_candidates_json(raw: str) -> list[Mapping[str, Any]] | None:
     return None
 
 
-def _build_candidate(item: Mapping[str, Any], evidence: UserEvidence) -> FactCandidate | None:
+def _build_candidate(item: Mapping[str, Any], evidence: UserEvidence, *,
+                     allow_rule_kind_aliases: bool = False) -> FactCandidate | None:
     quote = str(item.get("quote") or "").strip()
     if not quote or len(quote) > MAX_SUMMARY_CHARS:
         return None
@@ -228,10 +232,11 @@ def _build_candidate(item: Mapping[str, Any], evidence: UserEvidence) -> FactCan
     start = evidence.text.index(quote)
     end = start + len(quote)
     kind_raw = str(item.get("kind") or "fact")
-    # A rule is still a fact about the speaker's stated boundary. The product
-    # role classifier handles its use at retrieval time.
-    kind_raw = {"constraint": "fact", "boundary": "fact", "rule": "fact",
-                "禁止事项": "fact", "行为约束": "fact", "规则": "fact"}.get(kind_raw, kind_raw)
+    if allow_rule_kind_aliases:
+        # Contact utterances may contain stated boundaries. Owner extraction
+        # keeps its original strict enum behavior by default.
+        kind_raw = {"constraint": "fact", "boundary": "fact", "rule": "fact",
+                    "禁止事项": "fact", "行为约束": "fact", "规则": "fact"}.get(kind_raw, kind_raw)
     try:
         kind = FactKind(kind_raw)
     except ValueError:
