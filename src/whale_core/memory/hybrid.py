@@ -145,26 +145,26 @@ class HybridCurator:
                 groups.setdefault(rec.space_id, []).append(idx)
             for sid, idxs in groups.items():
                 try:
-                    summaries = [str(candidates[i].content.get("summary", ""))
-                                 for i in idxs]
                     # Namespace support is mandatory for shared embeddings.
                     # A legacy provider without this parameter must degrade to
                     # lexical retrieval, never silently share cross-space cache.
-                    vectors = self.embedder.embed([query, *summaries],
-                                                  namespace=sid)
-                    if len(vectors) != len(idxs) + 1:
-                        raise ValueError("embedding response length mismatch")
-                    qv = vectors[0]
-                    dimension = len(qv)
-                    if not dimension or any(
-                        len(vec) != dimension or
-                        any(not math.isfinite(value) for value in vec)
-                        for vec in vectors
-                    ):
-                        raise ValueError("invalid embedding vectors")
                     space_vectors = {}
-                    for pos, i in enumerate(idxs):
-                        space_vectors[rec_key(candidates, i)] = (qv, vectors[1 + pos])
+                    dimension = None
+                    for start in range(0, len(idxs), 128):
+                        batch = idxs[start:start + 128]
+                        vectors = self.embedder.embed(
+                            [query, *(str(candidates[i].content.get("summary", ""))
+                                      for i in batch)], namespace=sid)
+                        if len(vectors) != len(batch) + 1:
+                            raise ValueError("embedding response length mismatch")
+                        for vec in vectors:
+                            if (not vec or (dimension is not None and len(vec) != dimension)
+                                    or any(not math.isfinite(value) for value in vec)):
+                                raise ValueError("invalid embedding vectors")
+                            dimension = len(vec)
+                        qv = vectors[0]
+                        for pos, i in enumerate(batch):
+                            space_vectors[rec_key(candidates, i)] = (qv, vectors[1 + pos])
                     vecs_by_key.update(space_vectors)
                 except Exception:
                     degraded_spaces.add(sid)

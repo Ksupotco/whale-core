@@ -208,6 +208,41 @@ def test_short_embedding_response_degrades_entire_space():
         assert any("退化" in reason for reason in hits[record.key].reasons)
 
 
+def test_large_space_batches_embeddings_and_falls_back_after_late_failure():
+    store = InMemoryStore()
+    curator = MemoryCurator(store)
+    for index in range(130):
+        curator.remember(f"火锅口味{index}", source="chat", evidence_id=str(index),
+                         consent=True, space_id="owner")
+
+    class BoundedEmbedder:
+        def __init__(self, fail_second=False):
+            self.calls = 0
+            self.fail_second = fail_second
+
+        def embed(self, texts, *, namespace=""):
+            assert len(texts) <= 129  # query plus at most 128 memories
+            self.calls += 1
+            if self.fail_second and self.calls == 2:
+                raise RuntimeError("later batch failed")
+            return [[1.0, 0.0] for _ in texts]
+
+    working = BoundedEmbedder()
+    hits = HybridCurator(store, embedder=working).recall("火锅", limit=130)
+    assert working.calls == 2
+    assert len(hits) == 130
+    assert all("RRF名次融合" in hit.reasons for hit in hits)
+
+    failing = BoundedEmbedder(fail_second=True)
+    baseline = {hit.record.key: hit for hit in HybridCurator(store).recall(
+        "火锅", limit=130)}
+    degraded = HybridCurator(store, embedder=failing).recall("火锅", limit=130)
+    assert failing.calls == 2
+    assert all(hit.embedding_score == 0.0 and
+               hit.score == pytest.approx(baseline[hit.record.key].score)
+               for hit in degraded)
+
+
 def test_zero_overlap_low_embedding_excluded():
     store = InMemoryStore()
     keys = _seed(store)
