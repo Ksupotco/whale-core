@@ -32,6 +32,20 @@ from whale_core.memory.store import MemoryKind, MemoryRecord, MemoryStore
 TAG_OWNER_FACT = "owner_fact_v1"
 SCHEMA_VERSION = 1
 
+
+def _opposite_claim(old: str, new: str) -> bool:
+    """A narrow polarity flip can change a fact without changing its value."""
+    def normalized(text: str) -> str:
+        return re.sub(r"[\s，,。！!、：:]", "", str(text or "")).replace("其实", "")
+
+    left, right = normalized(old), normalized(new)
+    for negative, positive in (("不喜欢", "喜欢"), ("不想", "想"),
+                               ("不允许", "允许"), ("不能", "能")):
+        if (negative in left and left.replace(negative, positive, 1) == right
+                or negative in right and right.replace(negative, positive, 1) == left):
+            return True
+    return False
+
 # KV / record 键布局（无新 schema）
 def _k_gen(owner_id: str, space_id: str) -> str:
     return f"ofgen:{owner_id}:{space_id}"
@@ -747,7 +761,8 @@ class OwnerFactService:
                         and getattr(cand, "predicate", None)
                         and target.predicate
                         and cand.predicate == target.predicate
-                        and str(getattr(cand, "value", "") or "") != str(target.value or "")
+                        and (str(getattr(cand, "value", "") or "") != str(target.value or "")
+                             or _opposite_claim(target.summary, cand.summary))
                     )
                     if not bound:
                         # 更正建议无法定位明确目标（快照外/revision 已变/
@@ -895,7 +910,8 @@ class OwnerFactService:
                 not getattr(replacement, "predicate", None)
                 or not old.predicate
                 or replacement.predicate != old.predicate
-                or str(getattr(replacement, "value", "") or "") == str(old.value or "")
+                or (str(getattr(replacement, "value", "") or "") == str(old.value or "")
+                    and not _opposite_claim(old.summary, replacement.summary))
             ):
                 return MutationReport(False, "ambiguous_correction")
 

@@ -13,10 +13,16 @@ QQ live example now uses `DynamicHybridCurator`, which falls back to BM25 when
 no provider is available. This reranker uses task and attribute hints; it is
 not a Cross-Encoder.
 
+The legacy writer was not copied. One narrow decision was adapted into
+`owner_fact_v1`: an explicit same-object polarity change such as "I like coffee"
+to "I do not like coffee" can supersede the earlier fact even when the
+structured `value` is still "coffee". The existing evidence, authorization,
+revision, and correction-context checks still govern the transition.
+
 ## Checks
 
 - Relevant owner-fact, retrieval, embedding, correction, forgetting, and group
-  permission regressions: **246 passed, 1 deselected**. The deselected episode
+  permission regressions: **250 passed, 1 deselected**. The deselected episode
   deduplication test also fails on clean upstream.
 - TimlMemBench oracle-candidate activation diagnostic: sample 0082 **5/5**;
   dev **19/63**; holdout **18/82** exact selections. Four dev and two holdout
