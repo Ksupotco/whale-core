@@ -47,6 +47,13 @@ def activate(query: str, candidates, *, limit: int = 8,
             continue
         seen.add(candidate.key)
         role = memory_role(candidate.summary)
+        if role == "one_off":
+            retention_question = any(word in query for word in
+                                     ("凭证", "存档", "该保留什么", "应该保留什么"))
+            if retention_question and lexical_overlap(candidate.summary, query):
+                ranked.append((candidate.score + 1, candidate, "CONSTRAIN",
+                               "retention_constraint", ()))
+            continue
         if role == "boundary":
             relevance = boundary_relevance(
                 candidate.summary, query, subject_id=candidate.subject_id,

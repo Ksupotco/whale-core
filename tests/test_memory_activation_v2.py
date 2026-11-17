@@ -91,3 +91,18 @@ def test_dinner_constraint_does_not_pull_pet_food_rule():
         _candidate("pet", "猫吃三文鱼会挠脖子，不要买三文鱼罐头"),
     ))
     assert [row.candidate.key for row in rows] == ["person"]
+
+
+def test_one_off_choice_is_not_reused_as_durable_preference():
+    rows = activate("下次聚会给 A 买什么饮料？", (
+        _candidate("once", "A 只是当天想喝气泡水，不应作为长期饮品偏好"),
+        _candidate("usual", "A 平时喜欢燕麦奶"),
+    ))
+    assert all(row.candidate.key != "once" for row in rows)
+
+
+def test_one_off_code_rule_applies_to_record_retention_question():
+    rule = _candidate("code", "报名费页面的一次性核销码不应写入长期记忆")
+    rows = activate("整理报名费凭证时该保留什么？", (rule,))
+    assert [row.candidate.key for row in rows] == ["code"]
+    assert rows[0].decision == "CONSTRAIN"

@@ -15,16 +15,29 @@ _TOPICS = {
     "social": ("邀请", "饭局", "朋友", "座位"),
     "identity": ("称呼", "名字", "真名", "昵称", "叫我", "叫A", "被叫", "可以叫", "叫什么"),
     "family": ("家里", "家庭", "父母", "家人"),
+    "nonresponse": ("没回", "不回", "失联", "联系不上", "点名提醒"),
+    "checkin": ("关心", "是否还好", "问候", "主动追问", "单独询问"),
+    "photo": ("照片", "相册", "图片", "封面", "人像", "倒影"),
+    "contact": ("联系人", "旧电话", "电话号码", "紧急联系"),
+    "audio": ("录音", "哼唱", "歌单", "曲目"),
+    "encouragement": ("鼓励", "夸奖", "表扬"),
 }
-_GENERIC_BIGRAMS = {"群里", "公开", "回复", "别人", "朋友", "现在", "最近", "应该", "可以", "不要", "不想", "我的", "你的", "他的", "什么"}
+_GENERIC_BIGRAMS = {"群里", "群聊", "聊里", "私聊", "公开", "回复", "别人", "朋友", "现在", "最近", "应该", "可以", "不要", "不想", "我的", "你的", "他的", "什么"}
 
 
 def memory_role(summary: str) -> str:
     text = str(summary or "")
+    # A record about *not forming* a durable preference is not itself a
+    # behavior rule to inject into unrelated future replies.
+    if (any(word in text for word in ("一次性", "一时", "只是当天", "临时", "用完即忘"))
+            and any(word in text for word in
+                    ("不应写入长期", "不应升格", "不应作为长期", "不用记成长期",
+                     "不应记成长期", "不用记成长期偏好"))):
+        return "one_off"
     audience = any(word in text for word in
                    ("群里", "群聊", "公开", "对外", "转述", "透露", "分享", "汇报", "告诉别人"))
     rule = any(word in text for word in
-               ("不希望", "不想", "不要", "不应", "不能", "不得", "不打算", "别", "只允许", "先问", "需同意", "未经"))
+               ("不希望", "不想", "不要", "不应", "不能", "不得", "不适合", "不打算", "别", "只允许", "先问", "需同意", "未经"))
     if audience and rule:
         return "boundary"
     if (any(word in text for word in ("进门", "进屋", "开门", "门锁", "门码", "旧码", "钥匙", "密码"))
@@ -127,11 +140,19 @@ def boundary_relevance(summary: str, query: str, *, subject_id: str,
         return 0
     if public_rule and not public:
         return 0
+    private_action = any(word in question for word in ("主动私聊", "主动私下", "私下追问", "私聊追问"))
+    rule_about_private_action = any(word in text for word in
+                                    ("主动追问", "私下确认", "私聊追问", "私下问"))
+    if private_action and not rule_about_private_action:
+        return 0
     if not public_rule and not direct:
         return 0
     subject = str(subject_id or "")
     subject_match = (subject in ("", "owner") or bool(subject and subject in question))
-    shared_entity = bool(_bigrams(text) & _bigrams(question))
+    overlap = _bigrams(text) & _bigrams(question)
+    shared_entity = bool(overlap)
+    quoted = set(re.findall(r"[“‘\"]([^”’\"]{2,20})[”’\"]", text))
+    named_match = any(name in question for name in quoted)
     rule_topics = _topics(text)
     query_topics = _topics(question)
     if (group and "health" in rule_topics and "food" in query_topics
@@ -140,7 +161,9 @@ def boundary_relevance(summary: str, query: str, *, subject_id: str,
     broad_group_question = (group and any(word in question for word in
                             ("有没有人", "有谁", "谁", "大家", "有人"))
                             and bool(rule_topics & query_topics))
-    if not subject_match and not shared_entity and not broad_group_question:
+    if not shared_entity and not named_match and not (rule_topics & query_topics) and not broad_group_question:
+        return 0
+    if not rule_topics and len(overlap) < 3 and not named_match:
         return 0
     if "identity" in rule_topics and "identity" not in query_topics:
         return 0

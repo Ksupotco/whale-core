@@ -122,7 +122,7 @@ def _scoped_curated_rule_candidates(curator, spaces):
         if "curated" not in record.tags or not _reply_current_record(record, now):
             continue
         summary = str(record.content.get("summary") or "").strip()
-        if memory_role(summary) not in {"boundary", "access_permission", "constraint"}:
+        if memory_role(summary) not in {"boundary", "access_permission", "constraint", "one_off"}:
             continue
         out.append(MemoryCandidate(
             key=record.key, summary=summary, score=0.0, source="curated",
@@ -432,7 +432,8 @@ class WhaleCompanion:
                 if selected.decision == "CONSTRAIN":
                     label = {"disclosure_boundary": "当前披露边界",
                              "access_permission": "当前访问权限",
-                             "behavior_constraint": "当前行为约束"}.get(
+                             "behavior_constraint": "当前行为约束",
+                             "retention_constraint": "当前记录保留约束"}.get(
                                  selected.reason, "当前约束")
                     piece = f"[{label}] {piece}"
                 norm = _norm_mem(item.summary)

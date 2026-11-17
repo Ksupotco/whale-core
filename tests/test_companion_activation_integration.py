@@ -81,3 +81,20 @@ def test_revoked_boundary_never_reenters_through_normal_recall():
         "群里有人问我的身体怎么样", conversation_id="group:one",
         allowed_spaces=("group:one",), episodic=False)
     assert all("健康细节" not in item for item in brain.memories)
+
+
+def test_one_off_retention_rule_survives_crowded_recall():
+    store = InMemoryStore()
+    curator = MemoryCurator(store)
+    curator.remember("报名费的一次性核销码不应写入长期记忆", source="test",
+                     evidence_id="retention", consent=True,
+                     importance=0.1, stable_fact=True, space_id="owner")
+    for index in range(20):
+        curator.remember(f"整理报名费凭证时聊过天气{index}", source="test",
+                         evidence_id=f"noise-{index}", consent=True,
+                         importance=1.0, stable_fact=True, space_id="owner")
+    brain = CaptureBrain()
+    WhaleCompanion(store, brain, curator=curator).chat(
+        "整理报名费凭证时该保留什么？", episodic=False,
+        allowed_spaces=("owner",))
+    assert any("核销码不应写入长期记忆" in item for item in brain.memories)

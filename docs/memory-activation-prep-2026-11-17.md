@@ -29,6 +29,16 @@ cases. These figures were reproduced on the current branch. This remains
 insufficient for a merge-ready activation PR; the branch is submitted as a
 draft for code review and further correction.
 
+November 18 follow-up: keep one-off facts out of future preference replies while
+allowing their retention rules in record-keeping questions; narrow disclosure
+rules by subject matter, audience, and private-vs-public action. Add a separate
+scoped read for retention rules so ordinary Top-K recall cannot crowd them out.
+The same equal-pool diagnostic now selects exactly **23/63 dev** and
+**33/82 holdout**; forbidden selections fall to **10 dev** and **21 holdout**.
+One dev case loses a public nickname rule, so this is still a draft, not a
+merge-ready selector. The owner-fact, host, companion, and activation regression
+set is **201 passed** after the change. No model answer score is claimed.
+
 For a more comparable exploratory control,
 `evals/timlmembench_equal_pool_diagnostic.py` loads the same gold-current
 statements as synthetic curated memories and runs each version's product
