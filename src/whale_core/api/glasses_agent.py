@@ -156,7 +156,7 @@ class PendingConfirms:
 # 台账（风格对齐 ShellPolicy.audit：只记摘要，不记原始输出）
 # ---------------------------------------------------------------------------
 def _c200(value) -> str:
-    return str(value or "")[:200]
+    return str(value)[:200] if value is not None else ""
 
 
 class StoreLedger:
