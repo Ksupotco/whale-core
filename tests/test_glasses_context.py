@@ -99,30 +99,32 @@ def store(tmp_path):
 
 
 def test_save_snapshot_normalizes_and_replaces(store):
-    snap = save_context_snapshot(store, {"calendar": {TODAY: [
+    # 契约窗口 [today, today+7]：写入用例用服务端相对日期，避免真实时钟滚出窗口
+    today, tomorrow = _server_today(), _server_tomorrow()
+    snap = save_context_snapshot(store, {"calendar": {today: [
         {"id": "e1", "title": "组会", "start": "14:00", "end": "15:00",
          "allDay": False, "extra": "应被丢弃"}]}})
-    event = snap["calendar"][TODAY][0]
+    event = snap["calendar"][today][0]
     assert event == {"id": "e1", "title": "组会", "start": "14:00",
                      "end": "15:00", "allDay": False}
     assert "extra" not in event
     # 整体替换：第二次同步覆盖第一次，不留旧日期
-    save_context_snapshot(store, {"calendar": {TOMORROW: [
+    save_context_snapshot(store, {"calendar": {tomorrow: [
         {"title": "考试", "start": "09:00"}]}})
     stored = store.get(SNAPSHOT_KEY)
-    assert list(stored["calendar"].keys()) == [TOMORROW]
+    assert list(stored["calendar"].keys()) == [tomorrow]
     # weather 不随日历快照持久化（保持 request-only）
     assert "weather" not in stored
 
 
 def test_save_snapshot_empty_list_means_no_events(store):
-    snap = save_context_snapshot(store, {"calendar": {TODAY: []}})
-    assert snap["calendar"][TODAY] == []
+    snap = save_context_snapshot(store, {"calendar": {_server_today(): []}})
+    assert snap["calendar"][_server_today()] == []
 
 
 def test_save_snapshot_null_means_unreadable(store):
-    snap = save_context_snapshot(store, {"calendar": {TODAY: None}})
-    assert snap["calendar"][TODAY] is None
+    snap = save_context_snapshot(store, {"calendar": {_server_today(): None}})
+    assert snap["calendar"][_server_today()] is None
 
 
 def test_save_snapshot_validation(store):
@@ -131,9 +133,10 @@ def test_save_snapshot_validation(store):
     with pytest.raises(ValueError):
         save_context_snapshot(store, {"calendar": {"11-11": []}})  # 非法日期
     with pytest.raises(ValueError):
-        save_context_snapshot(store, {"calendar": {TODAY: "组会"}})  # 非数组
+        save_context_snapshot(store, {"calendar": {_server_today(): "组会"}})  # 非数组
     with pytest.raises(ValueError):
-        save_context_snapshot(store, {"calendar": {TODAY: [{"start": "14:00"}]}})  # 缺 title
+        save_context_snapshot(store, {"calendar": {_server_today(): [
+            {"start": "14:00"}]}})  # 缺 title
 
 
 # ---------- 纯函数：render_context ----------
@@ -465,11 +468,15 @@ def test_concurrent_requests_facts_isolation(delegates):
 
 
 def test_snapshot_date_normalization_and_all_day_rendering(store):
-    snap = save_context_snapshot(store, {"calendar": {"2026-1-2": [
+    # 非零填充日期键归一化为 ISO；用服务端今天构造，保证在契约窗口内
+    today = datetime.now(SHANGHAI).date()
+    unpadded = f"{today.year}-{today.month}-{today.day}"
+    snap = save_context_snapshot(store, {"calendar": {unpadded: [
         {"title": "全天活动", "start": "00:00", "allDay": True}]}})
-    assert "2026-01-02" in snap["calendar"]
-    assert snap["calendar"]["2026-01-02"][0]["allDay"] is True
-    out = render_context(snap, now=datetime(2026, 1, 2, 8, tzinfo=SHANGHAI))
+    assert today.isoformat() in snap["calendar"]
+    assert snap["calendar"][today.isoformat()][0]["allDay"] is True
+    out = render_context(snap, now=datetime(
+        today.year, today.month, today.day, 8, tzinfo=SHANGHAI))
     assert "全天 全天活动" in out and "00:00" not in out
 
 

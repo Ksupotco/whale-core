@@ -1070,17 +1070,26 @@ def make_handler(delegates):
             _json_response(self, 404, {"error": "not found"})
 
         def _context_sync(self):
+            from whale_core.api.glasses_context import ContextSyncError
             body = self._read_json()
             if body is None:
-                _json_response(self, 400, {"error": "invalid json body"})
+                if getattr(self, "_body_too_large", False):
+                    _json_response(self, 413, {"error": "payload_too_large"})
+                else:
+                    _json_response(self, 400, {"error": "invalid_json"})
                 return
             try:
                 snapshot = delegates["sync_context"](body)
-            except (ValueError, TypeError) as exc:
-                _json_response(self, 400, {"error": str(exc)})
+            except ContextSyncError as exc:
+                _json_response(self, 400, {"error": exc.code})
                 return
-            _json_response(self, 200, {"ok": True, "receivedAt": snapshot["receivedAt"],
-                                      "dates": list(snapshot["calendar"])})
+            except (ValueError, TypeError):
+                _json_response(self, 400, {"error": "invalid_json"})
+                return
+            _json_response(self, 200, {"ok": True, "stored": snapshot["stored"],
+                                      "receivedAt": snapshot["receivedAt"],
+                                      "dates": list(snapshot["calendar"]),
+                                      "idempotent": snapshot["idempotent"]})
 
         def _chat(self):
             from whale_core.api.glasses_context import split_chat_context
@@ -1385,8 +1394,14 @@ def _openapi() -> dict:
         "info": {"title": "whale-glasses", "version": "1.0.0"},
         "paths": {
             "/v1/context/sync": {"post": {
-                "summary": "替换手机日程快照：calendar按ISO日期映射事件数组；[]空日程，null未知",
-                "responses": {"200": {"description": "ok, receivedAt, dates"}},
+                "summary": "替换手机日程快照：calendar按ISO日期映射事件数组（单日≤12、"
+                           "title≤120、窗口[today,today+7]上海时区）；[]空日程，null未知；"
+                           "同快照幂等",
+                "responses": {"200": {"description": "ok, stored, receivedAt, dates, idempotent"},
+                              "400": {"description": "invalid_json | invalid_date | "
+                                                     "too_many_entries | title_too_long"},
+                              "401": {"description": "unauthorized"},
+                              "413": {"description": "payload_too_large"}},
                 "security": [{"bearerAuth": []}]}},
             "/v1/chat": {"post": {"summary": "眼镜/手机文字对话（第一条秒回；"
                                              "body.followup=\"poll\" 时第二条走 /v1/chat/followup）",
