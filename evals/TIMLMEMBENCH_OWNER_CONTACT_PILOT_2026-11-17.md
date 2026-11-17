@@ -29,3 +29,45 @@ holdout accuracy. No full benchmark score or PR improvement claim follows from
 them. Local predictions and judge files are under
 `E:\2026-1\tmp\timlmembench_owner_contact_{dev5_v4,holdout5}_{predictions,scores}.jsonl`.
 They contain synthetic benchmark conversations and are not committed.
+
+## Selective new-version relation update
+
+The old improved `FactService` was used as a reference for one narrow
+transition: when an explicit new entry/delivery rule replaces an older
+composite instruction from the same contact, the old instruction becomes
+`needs_revalidation` and leaves current recall. Independent facts remain
+accepted. The new logic is in `memory/fact_relations.py` and
+`memory/contact_facts.py`; it does not replace `owner_fact_v1`.
+
+Re-running only the first two holdout activation cases (sample 0099) with the
+same DeepSeek model changed the result from **0/2 to 1/2**. The cold-medication
+parcel question now receives the current L-12 placement and no-entry rule;
+the old 8614/key/inside-dropoff records are marked `needs_revalidation`.
+The follow-up silence question still fails because the situational boundary
+does not enter answer context. This is a targeted regression result, not a new
+five-question or full holdout score. Local files:
+`E:\2026-1\tmp\timlmembench_owner_contact_holdout2_relation_{predictions,scores}.jsonl`.
+
+## Explicit-change writer and nonresponse activation follow-up
+
+The next run showed that the extractor could return the right quoted sentence
+with invalid metadata. The contact writer then rejected the candidate, leaving
+the revoked L-12 placement active and omitting the new R2 placement. It now
+independently validates exact original sentences for explicit rule withdrawal
+or delivery relocation. An old fact sharing the withdrawn rule identifier is
+revoked; a changed delivery placement quarantines the former instruction.
+The earlier no-entry rule remains active. A separate activation cue selects
+the contact's signal and no-escalation boundary when the query says the contact
+has not responded.
+
+The final fixed two-question holdout rerun (sample 0099) scored **2/2** with
+`deepseek-v4.1-flash-1017` for extraction, answering, and judging. The parcel
+answer uses R2, rejects L-12 and the old code/key. The silence answer applies
+the contact's "红水壶" signal and does not escalate merely because of no reply.
+This is a local regression on two previously failing questions, not a full
+holdout result. Predictions and judge output are saved at
+`E:\2026-1\tmp\timlmembench_owner_contact_holdout2_explicit_changes_v2_{predictions,scores}.jsonl`.
+
+The related owner, worker, host, contact, retrieval, and activation regression
+suite passed **175 tests**. The new product write fallback is limited to the
+contact import path; `owner_fact_v1` remains the live owner writer.

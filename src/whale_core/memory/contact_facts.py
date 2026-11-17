@@ -12,8 +12,11 @@ from hashlib import sha256
 import re
 
 from whale_core.memory.curation import _terms
+from whale_core.memory.fact_relations import (
+    explicit_change_sentences, revalidation_reason,
+)
 from whale_core.memory.owner_fact_extraction import (
-    OwnerFactExtractor, has_correction_context, validate_candidate,
+    FactCandidate, OwnerFactExtractor, has_correction_context, validate_candidate,
 )
 from whale_core.memory.owner_facts import (
     FactKind, FactRecord, FactStatus, MemoryAuthorization, SourceRef,
@@ -144,7 +147,12 @@ class ContactFactService:
             space_id=evidence.space_id, text=evidence.text,
             received_at=evidence.received_at,
         )
-        candidates = self.extractor.extract(user_evidence, tuple(snapshot.values()))
+        candidates = list(self.extractor.extract(user_evidence, tuple(snapshot.values())))
+        for sentence in explicit_change_sentences(evidence.text):
+            start = evidence.text.index(sentence)
+            candidates.append(FactCandidate(
+                FactKind.FACT, sentence, evidence.evidence_id,
+                sentence, start, start + len(sentence)))
         accepted = 0
         for candidate in candidates:
             candidate = self._complete_sentence(candidate, evidence.text)
@@ -228,6 +236,23 @@ class ContactFactService:
                     tx.put_record(replace(old, content={**old.content,
                                                         "status": ("revoked" if revocation
                                                                    else "superseded")}))
+                for earlier in existing:
+                    if replace_old and target is not None and earlier.record_id == target.fact_id:
+                        continue
+                    reason = revalidation_reason(
+                        str(earlier.content.get("summary") or ""), candidate.quote)
+                    if not reason:
+                        continue
+                    current = tx.get_record(earlier.key)
+                    if current is None or current.content.get("status") != "accepted":
+                        continue
+                    tx.put_record(replace(current, content={
+                        **current.content,
+                        "status": ("revoked" if reason == "rule_revoked"
+                                   else "needs_revalidation"),
+                        "revalidation_reason": reason,
+                        "revalidation_evidence_id": evidence.evidence_id,
+                    }))
                 tx.put_record(new)
                 return True
 

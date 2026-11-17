@@ -158,3 +158,99 @@ def test_contact_fact_sqlite_transaction_and_recall():
             "summary"] == evidence.text
     finally:
         store.db.close()
+
+
+def test_new_delivery_rule_quarantines_old_composite_without_losing_unrelated():
+    class Extractor:
+        def extract(self, evidence, existing):
+            quote = evidence.text
+            return (FactCandidate(FactKind.FACT, quote, evidence.evidence_id,
+                                  quote, 0, len(quote)),)
+
+    store = InMemoryStore()
+    ensure_owner_working_copy(store, owner="B")
+    service = ContactFactService(store, Authority(), Extractor())
+    auth = Authority().authorize_principal_now("B", "owner-working", "B:qq")
+    stamp = datetime.now(timezone.utc)
+
+    def observed(contact, eid, text):
+        return ContactEvidence("B", "owner-working", "B:qq", contact,
+                               eid, "private:A-B", text, stamp)
+
+    old = "如果冷藏药提前到，你就进门放冰箱上层，罗勒浇一杯水。"
+    unrelated = "我喜欢燕麦奶"
+    current = "冷藏药不要再拿进屋，放楼下前台储物柜 L-12。"
+    assert service.observe(observed("A", "e1", old), auth) == 1
+    assert service.observe(observed("A", "e2", unrelated), auth) == 1
+    assert service.observe(observed("C", "e3", old), auth) == 1
+    assert service.observe(observed("A", "e4", current), auth) == 1
+    states = {(r.content["contact_id"], r.content["summary"]): r.content["status"]
+              for r in service.list_states(auth)}
+    assert states[("A", old)] == "needs_revalidation"
+    assert states[("A", unrelated)] == "accepted"
+    assert states[("C", old)] == "accepted"
+    assert states[("A", current)] == "accepted"
+    assert old not in [hit.record.content["summary"] for hit in
+                       service.retrieve_hits(auth, "A的冷藏药进屋")]
+
+
+def test_explicit_change_survives_model_omission_and_retires_old_location():
+    class SparseExtractor:
+        def extract(self, evidence, existing):
+            return ()
+
+    store = InMemoryStore()
+    ensure_owner_working_copy(store, owner="B")
+    service = ContactFactService(store, Authority(), SparseExtractor())
+    auth = Authority().authorize_principal_now("B", "owner-working", "B:qq")
+    stamp = datetime.now(timezone.utc)
+
+    def observed(eid, text):
+        return ContactEvidence("B", "owner-working", "B:qq", "A",
+                               eid, "private:A-B", text, stamp)
+
+    old = "冷藏药放楼下前台储物柜 L-12。"
+    new = "现在冷藏药改放楼下药房冰柜 R2，写我姓就行。"
+    assert service.observe(observed("e1", old), auth) == 0
+    # Seed the previously extracted old fact through a model that selects it.
+    class FullExtractor:
+        def extract(self, evidence, existing):
+            return (FactCandidate(FactKind.FACT, evidence.text, evidence.evidence_id,
+                                  evidence.text, 0, len(evidence.text)),)
+
+    writer = ContactFactService(store, Authority(), FullExtractor())
+    assert writer.observe(observed("e2", old), auth) == 1
+    assert service.observe(observed("e3", new), auth) == 1
+    states = {r.content["summary"]: r.content["status"]
+              for r in service.list_states(auth)}
+    assert states[old] == "needs_revalidation"
+    assert states[new] == "accepted"
+    assert [hit.record.content["summary"] for hit in
+            service.retrieve_hits(auth, "A 冷藏药放哪里")] == [new]
+
+    other_old = "冷藏药放前台储物柜 Q-9。"
+    assert writer.observe(observed("e4", other_old), auth) == 1
+    assert service.observe(observed("e5", "Q-9 那个临时药件规则也撤掉。"),
+                           auth) == 1
+    states = {r.content["summary"]: r.content["status"]
+              for r in service.list_states(auth)}
+    assert states[other_old] == "revoked"
+
+
+def test_explicit_change_survives_invalid_model_metadata():
+    class InvalidMetadataExtractor:
+        def extract(self, evidence, existing):
+            text = evidence.text
+            return (FactCandidate(FactKind.FACT, text, evidence.evidence_id,
+                                  text, 0, len(text), value="unspoken"),)
+
+    store = InMemoryStore()
+    ensure_owner_working_copy(store, owner="B")
+    service = ContactFactService(store, Authority(), InvalidMetadataExtractor())
+    auth = Authority().authorize_principal_now("B", "owner-working", "B:qq")
+    text = "现在冷藏药改放楼下药房冰柜 R2。"
+    evidence = ContactEvidence("B", "owner-working", "B:qq", "A", "e1",
+                               "private:A-B", text, datetime.now(timezone.utc))
+    assert service.observe(evidence, auth) == 1
+    assert [h.record.content["summary"] for h in
+            service.retrieve_hits(auth, "A 冷藏药放哪里")] == [text]
