@@ -651,6 +651,26 @@ class TestCorrection:
         assert len(hits) == 1 and "团子" in hits[0].summary
         assert hits[0].revision == 2 and hits[0].supersedes == old_id
 
+    def test_explicit_polarity_flip_supersedes_same_value(self, store):
+        svc = make_service(store)
+        first = make_evidence("我喜欢咖啡", eid="ev-likes")
+        job = observe_and_lease(store, svc, first, make_auth())
+        old = make_candidate(first, "我喜欢咖啡", kind=FactKind.PREFERENCE,
+                             predicate="likes", value="咖啡")
+        old_id = commit_first_job(store, svc, job, [old]).accepted_fact_ids[0]
+        previous = svc.get_fact(old_id)
+
+        correction = make_evidence("更正：我不喜欢咖啡", eid="ev-dislikes")
+        job2 = observe_and_lease(store, svc, correction, make_auth(),
+                                 snapshot=[previous])
+        replacement = make_candidate(
+            correction, "我不喜欢咖啡", kind=FactKind.PREFERENCE,
+            predicate="likes", value="咖啡", correction_target=old_id)
+        report = commit_first_job(store, svc, job2, [replacement])
+        assert report.superseded_fact_ids == (old_id,)
+        assert svc.get_fact(old_id).status == FactStatus.SUPERSEDED
+        assert [fact.summary for fact in svc.retrieve(make_auth(), "咖啡")] == ["我不喜欢咖啡"]
+
     def test_correction_chain_anchor_recall(self, store):
         """省略主体的更正（"它叫团子"）借旧链 summary 做只读检索锚：
         问"我的猫名字"命中新版；旧版不返回；遗忘后锚断裂。"""
@@ -736,6 +756,21 @@ class TestCorrection:
         # 已被取代的旧事实不可再更正
         report2 = svc.correct(old_id, 1, ev_fix, repl, make_auth())
         assert not report2.ok and report2.reason_code == "not_accepted"
+
+    def test_correct_command_accepts_explicit_polarity_flip(self, store):
+        svc = make_service(store)
+        first = make_evidence("我喜欢咖啡", eid="ev-command-old")
+        job = observe_and_lease(store, svc, first, make_auth())
+        old = make_candidate(first, "我喜欢咖啡", kind=FactKind.PREFERENCE,
+                             predicate="likes", value="咖啡")
+        old_id = commit_first_job(store, svc, job, [old]).accepted_fact_ids[0]
+        correction = make_evidence("更正：我不喜欢咖啡", eid="ev-command-new")
+        replacement = make_candidate(correction, "我不喜欢咖啡",
+                                     kind=FactKind.PREFERENCE,
+                                     predicate="likes", value="咖啡")
+        report = svc.correct(old_id, 1, correction, replacement, make_auth())
+        assert report.ok
+        assert [fact.summary for fact in svc.retrieve(make_auth(), "咖啡")] == ["我不喜欢咖啡"]
 
     def test_correct_cross_space_forbidden(self, store):
         svc = make_service(store)
