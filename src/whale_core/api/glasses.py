@@ -18,6 +18,10 @@
 - ``POST /v1/result/deliver``：统一结果投递（ResultDelivery）——QQ 在线优先；
   QQ 离线走 Whale 原生通知（在线直发/离线补传），图片可继续回落手机图库。
   ``/v1/chat`` 请求体 ``deliverResult=true`` 时也会在回复后走同一路由。
+- ``POST /v1/agent``（2026-11-17）：带门控智能体回合——聊天/只读直接执行；
+  自由 shell/写文件/自修改一律 pending 两阶段回声确认（confirmId 一次性 +
+  10 分钟 TTL，``pending.exact`` 镜片原样显示）；高危模式 denied 无确认入口。
+  实现在 ``whale_core/api/glasses_agent.py``。
 - ``POST /v1/rayneo/ingest|query|control``：雷鸟眼镜全天转写上传 / 查询 / 删除。
   鉴权同 ``WHALE_GLASSES_TOKEN``。ingest 体上限 320 KiB，query/control 64 KiB。
 
@@ -922,9 +926,31 @@ def build_delegates(env: dict, *, brain_factory=None, quick_brain_factory=None,
         finally:
             REQUEST_FACTS.reset(token)
 
+    # /v1/agent：眼镜面带门控智能体（聊天/只读直执行；shell/写/自修改一律
+    # pending 两阶段回声确认；高危 denied 无确认入口）。装配失败不拖垮主对话。
+    agent = None
+    try:
+        from pathlib import Path as _AgentPath
+        from whale_core.api.glasses_agent import GlassesAgent, SelfModifier
+
+        def _agent_chat(text: str, conversation_id: str) -> str:
+            reply, _timing = chat_with_context(text, conversation_id)
+            return reply
+
+        agent = GlassesAgent(
+            store=store,
+            chat=_agent_chat,
+            workspace=_AgentPath(cfg.store_path).parent / "workspace",
+            self_modifier=SelfModifier(
+                (env.get("WHALE_AGENT_REPO") or "").strip() or os.getcwd()),
+            env=env)
+    except Exception as exc:  # noqa: BLE001 — agent 装配失败不阻止主服务
+        print(f"[glasses] agent not wired: {type(exc).__name__}", flush=True)
+
     return {"companion_chat": chat_with_context, "quick_chat": quick_with_context,
             "context_resolver": context_resolver,
             "sync_context": lambda body: save_context_snapshot(store, body),
+            "agent": agent,
             "followup_poll": followup_poll,
             "qq_send": qq_send, "deliver_result": deliver_result,
             "prefs": prefs, "store": store,
@@ -1028,7 +1054,7 @@ def make_handler(delegates):
         def do_GET(self):
             if self.path == "/v1/health":
                 _json_response(self, 200, {"ok": True,
-                                           "capabilities": ["/v1/chat", "/v1/context/sync", "/v1/chat/followup", "/v1/qq/reply", "/v1/result/deliver",
+                                           "capabilities": ["/v1/chat", "/v1/context/sync", "/v1/agent", "/v1/chat/followup", "/v1/qq/reply", "/v1/result/deliver",
                                                             "/v1/rayneo/ingest", "/v1/rayneo/query", "/v1/rayneo/control"]})
                 return
             if self.path == "/openapi.json":
@@ -1044,6 +1070,9 @@ def make_handler(delegates):
                 return
             if self.path == "/v1/context/sync":
                 self._context_sync()
+                return
+            if self.path == "/v1/agent":
+                self._agent()
                 return
             if self.path == "/v1/chat":
                 self._chat()
@@ -1090,6 +1119,43 @@ def make_handler(delegates):
                                       "receivedAt": snapshot["receivedAt"],
                                       "dates": list(snapshot["calendar"]),
                                       "idempotent": snapshot["idempotent"]})
+
+        def _agent(self):
+            """POST /v1/agent —— 带门控的智能体回合（聊天/只读直接执行；
+            shell/写/自修改一律 pending 两阶段；高危 denied 无确认入口）。"""
+            body = self._read_json()
+            if body is None:
+                if getattr(self, "_body_too_large", False):
+                    _json_response(self, 413, {"error": "payload_too_large"})
+                else:
+                    _json_response(self, 400, {"error": "invalid_json"})
+                return
+            agent = delegates.get("agent")
+            if agent is None:
+                _json_response(self, 503, {"error": "agent_unavailable"})
+                return
+            text = body.get("text")
+            if text is not None and not isinstance(text, str):
+                _json_response(self, 400, {"error": "invalid_json"})
+                return
+            text = (text or "").strip()[:MAX_TEXT_CHARS]
+            session_id = str(body.get("sessionId") or "").strip()[:64] \
+                or uuid.uuid4().hex
+            confirm_id = str(body.get("confirmId") or "").strip()[:128]
+            if not text and not confirm_id:
+                _json_response(self, 400, {"error": "text required"})
+                return
+            # owner 身份只来自 Bearer（do_POST 已校验）；绝不从 body 取身份。
+            try:
+                payload = agent.handle_turn(
+                    text, session_id, confirm_id or None)
+            except Exception as exc:
+                _json_response(self, 200, {"sessionId": session_id,
+                                           "reply": None, "actions": [],
+                                           "pending": None,
+                                           "error": type(exc).__name__})
+                return
+            _json_response(self, 200, payload)
 
         def _chat(self):
             from whale_core.api.glasses_context import split_chat_context
@@ -1403,6 +1469,16 @@ def _openapi() -> dict:
                               "401": {"description": "unauthorized"},
                               "413": {"description": "payload_too_large"}},
                 "security": [{"bearerAuth": []}]}},
+            "/v1/agent": {"post": {
+                "summary": "带门控智能体回合：{text, sessionId?, confirmId?} → "
+                           "{sessionId, reply, actions[], pending?}；聊天/只读直接执行，"
+                           "shell/写文件/自修改一律 pending 两阶段回声确认（confirmId "
+                           "一次性+10分钟TTL），高危 denied 无确认入口",
+                "responses": {"200": {"description": "agent turn"},
+                              "400": {"description": "invalid_json | text required"},
+                              "401": {"description": "unauthorized"},
+                              "413": {"description": "payload_too_large"}},
+                "security": [{"bearerAuth": []}]}},
             "/v1/chat": {"post": {"summary": "眼镜/手机文字对话（第一条秒回；"
                                              "body.followup=\"poll\" 时第二条走 /v1/chat/followup）",
                                   "parameters": [],
@@ -1531,6 +1607,7 @@ def main(argv=None) -> int:
 
     print(f"whale-glasses-api 监听 http://{args.host}:{args.port}"
           f"（/v1/chat /v1/chat/followup /v1/qq/reply /v1/result/deliver "
+          f"/v1/context/sync /v1/agent "
           f"/v1/rayneo/ingest /v1/rayneo/query /v1/rayneo/control /v1/health /openapi.json）")
     try:
         server.serve_forever()
