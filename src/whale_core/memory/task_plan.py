@@ -35,6 +35,8 @@ def plan_query(query: str, *, group: bool = False) -> TaskPlan:
     add("nonresponse", any(w in text for w in
         ("没回", "不回", "未回", "联系不上", "失联", "没消息", "关机", "安静")))
     add("drink", any(w in text for w in ("饮料", "燕麦奶", "气泡水")))
+    add("food_choice", any(w in text for w in
+        ("点餐", "火锅", "锅底", "清汤", "聚餐")))
     add("absence", any(w in text for w in ("为什么突然", "少参加", "临时走开", "没来活动")))
     add("frontdesk", any(w in text for w in ("前台", "邻居", "对外安排")))
     add("disclosure", any(w in text for w in
@@ -56,6 +58,8 @@ _EVIDENCE = {
     "nonresponse": ("没回", "不回", "未回", "联系不上", "失联", "没消息",
                     "关机", "安静", "默认我是在睡", "不要脑补出事"),
     "drink": ("饮料", "燕麦奶", "气泡水"),
+    "food_choice": ("点餐", "火锅", "锅底", "清汤", "辣油", "聚餐",
+                    "不加辣", "清淡"),
     "absence": ("临时走开", "私事", "日程冲突", "少参加", "问起A为什么"),
     "frontdesk": ("前台", "邻居", "对外安排", "物资"),
     "disclosure": ("群里", "群聊", "对外", "转述", "透露", "分享", "告诉别人"),

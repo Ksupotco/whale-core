@@ -46,6 +46,23 @@ def test_explicit_recall_request_keeps_the_named_fact():
     assert [row.candidate.key for row in rows] == ["food"]
 
 
+def test_group_disclosure_does_not_pull_unrelated_pet_care_rule():
+    rows = activate("群里有人问栗子最近怎么了，想回复", (
+        _candidate("privacy", "不要在群里透露栗子的病情"),
+        _candidate("treat", "栗子最近不要吃鱼味零食"),
+    ), is_group=True)
+    assert [row.candidate.key for row in rows] == ["privacy"]
+
+
+def test_group_food_choice_keeps_meal_rule_and_privacy_boundary():
+    rows = activate("群聊里大家定火锅锅底，想照顾 A 又不暴露健康信息", (
+        _candidate("meal", "聚餐不要默认点辣油，应留清汤选项"),
+        _candidate("privacy", "不要在群里说 A 胃怎么了"),
+        _candidate("pet", "栗子不要吃鱼味零食"),
+    ), is_group=True)
+    assert {row.candidate.key for row in rows} == {"meal", "privacy"}
+
+
 def test_sharing_question_keeps_subject_fact_and_applicable_boundary():
     rows = activate("可以告诉群友我的猫叫什么吗", (
         _candidate("name", "我养的猫叫年糕"),

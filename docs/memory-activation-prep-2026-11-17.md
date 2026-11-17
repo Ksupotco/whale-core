@@ -7,19 +7,30 @@ context-aware reranker. It does not add contact transcript import, a cloud
 embedding provider, or a Cross-Encoder.
 
 Local owner-fact, worker, host integration, companion, and activation tests:
-**171 passed**.
+**173 passed**.
 The tests caught a regression where an explicit question such as “香菜的事还记得吗”
 lost the relevant curated fact; the branch now preserves a single distinctive
 term match for explicit recall requests.
 
 An offline TimlMemBench diagnostic supplies *gold current-state candidates*
 directly to the activation gate, without testing writing, retrieval, or the
-answer model. With task/attribute reranking, exact selection was **17/63 dev**
-and **18/82 holdout**. Forbidden candidates were selected in **26 dev** and
-**50 holdout** cases. These numbers are diagnostic, not product benchmark
-accuracy. They show that the rule classifier and activation threshold still
-over-select. This branch is therefore preparation for review, not a PR-ready
-claim of improved activation.
+answer model. The initial task/attribute reranker selected the exact set in
+**17/63 dev** and **18/82 holdout** cases. Narrower behavior-rule matching
+and an explicit meal-choice need raised this to **23/63 dev** and
+**23/82 holdout**, with forbidden selections in **12 dev** and **38 holdout**
+cases. This remains insufficient for an activation PR.
+
+For a more comparable exploratory control,
+`evals/timlmembench_equal_pool_diagnostic.py` loads the same gold-current
+statements as synthetic curated memories and runs each version's product
+recall/context path without an answer model. Under this artificial common
+pool, improved old v1 selected the exact set in **6/63 dev** and
+**4/82 holdout**, while this branch reached **23/63** and **23/82**.
+These are *not* the official end-to-end answer scores: the old and new paths
+have different memory schemas, all synthetic statements were placed in one
+authorized owner space, and matching the selected text back to state IDs is
+only a diagnostic. The holdout cases have been inspected during development
+and must not be treated as unseen evidence of generalization.
 
 Before proposing integration, inspect the forbidden selections, add cases for
 ordinary conversational recall and audience-specific rules, and compare the

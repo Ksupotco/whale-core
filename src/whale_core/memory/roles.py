@@ -73,10 +73,13 @@ def constraint_relevance(summary: str, query: str) -> int:
     plan = plan_query(query)
     matched = set(evidence_needs(summary, plan))
     primary = set(plan.needs) - {"disclosure", "proactive"}
+    if "disclosure" in plan.needs and not primary:
+        return 0  # Disclosure questions use applicable boundaries, not generic behavior rules.
     if primary and not (matched & primary):
         return 0
     overlap = _bigrams(str(summary or "")) & _bigrams(str(query or ""))
-    if not overlap and "nonresponse" not in matched:
+    if ((not overlap and not ({"nonresponse", "food_choice"} & matched))
+            or (not primary and len(overlap) < 2)):
         return 0
     score = 1 + len(overlap)
     # Match the requested pet action, not merely the same animal's name.
