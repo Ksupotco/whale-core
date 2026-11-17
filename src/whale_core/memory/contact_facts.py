@@ -146,12 +146,9 @@ class ContactFactService:
         )
         candidates = self.extractor.extract(user_evidence, tuple(snapshot.values()))
         accepted = 0
-        retained_quotes: list[str] = []
-        for candidate in sorted(candidates, key=lambda item: len(item.quote), reverse=True):
+        for candidate in candidates:
             candidate = self._complete_sentence(candidate, evidence.text)
             if candidate is None:
-                continue
-            if any(candidate.quote in quote for quote in retained_quotes):
                 continue
             if candidate.correction_target not in snapshot:
                 candidate = replace(candidate, correction_target=None)
@@ -236,7 +233,6 @@ class ContactFactService:
 
             if self.store.transact(commit):
                 accepted += 1
-                retained_quotes.append(candidate.quote)
         return accepted
 
     def retrieve_hits(self, auth: MemoryAuthorization, query: str, *,
