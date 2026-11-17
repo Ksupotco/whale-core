@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -26,6 +27,38 @@ def _terms(text: str) -> set[str]:
         else:
             parts.add(tok)
     return parts
+
+
+def _bm25_scores(query: str, records: list[MemoryRecord]) -> dict[str, float]:
+    """Rank the authorized candidate pool by term frequency and rarity."""
+    terms = _terms(query)
+    if not terms or not records:
+        return {}
+    rows: list[Counter[str]] = []
+    for rec in records:
+        counts: Counter[str] = Counter()
+        for token in re.findall(r"[a-zA-Z0-9]+|[\u4e00-\u9fff]+",
+                                str(rec.content.get("summary") or "").lower()):
+            if re.fullmatch(r"[\u4e00-\u9fff]+", token):
+                counts.update(token)
+                counts.update(token[i:i + 2] for i in range(len(token) - 1))
+            else:
+                counts[token] += 1
+        rows.append(counts)
+    lengths = [sum(row.values()) for row in rows]
+    average = max(1.0, sum(lengths) / len(lengths))
+    frequency = Counter(term for row in rows for term in row)
+    scores: dict[str, float] = {}
+    for rec, row, length in zip(records, rows, lengths):
+        scores[rec.key] = sum(
+            math.log1p((len(records) - frequency[term] + 0.5) /
+                       (frequency[term] + 0.5))
+            * row[term] * 2.2 /
+            (row[term] + 1.2 * (0.25 + 0.75 * length / average))
+            for term in terms & row.keys()
+        )
+    maximum = max(scores.values(), default=0.0)
+    return {key: score / maximum for key, score in scores.items()} if maximum else scores
 
 
 @dataclass(frozen=True)
@@ -113,13 +146,11 @@ class MemoryCurator:
                                            include_protected=include_protected) +
                    self.store.list_by_kind(MemoryKind.PREFERENCE, space_ids=space_ids,
                                            include_protected=include_protected))
-        for rec in records:
-            if "curated" not in rec.tags:
-                continue
-            if "superseded" in rec.tags:
-                continue  # 被更正的旧记忆不再召回（G2）
-            if _is_expired(rec.content, current):
-                continue  # TTL 到期退出召回（MEM-04）
+        eligible = [rec for rec in records if "curated" in rec.tags
+                    and "superseded" not in rec.tags
+                    and _is_expired(rec.content, current) is False]
+        bm25 = _bm25_scores(query, eligible)
+        for rec in eligible:
             content = rec.content
             stable = bool(content.get("stable_fact"))
             terms = _terms(str(content.get("summary", "")))
@@ -128,13 +159,13 @@ class MemoryCurator:
                 continue
             if not query_terms and not stable:
                 continue
-            relevance = len(common) / max(1, len(query_terms))
+            relevance = bm25.get(rec.key, 0.0)
             age = max(0.0, (current - rec.created_at).total_seconds() / 86400)
             freshness = 1.0 if stable else math.pow(0.5, age / self.half_life_days)
             importance = float(content.get("importance", 0.5))
             confidence = float(content.get("confidence", 1.0))
             score = confidence * (0.65 * relevance + 0.25 * importance + 0.10 * freshness)
-            reasons = ("词项匹配" if common else "稳定事实",
+            reasons = (f"BM25:{relevance:.2f}" if common else "稳定事实",
                        "长期事实不衰减" if stable else f"距今{age:.0f}天",
                        f"来源:{content.get('source', 'unknown')}",
                        f"证据:{content.get('evidence_id', 'unknown')}")
