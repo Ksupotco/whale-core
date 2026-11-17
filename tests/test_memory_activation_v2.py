@@ -38,6 +38,14 @@ def test_duplicate_candidate_key_is_selected_once():
     assert len(activate("我的猫叫什么", (fact, fact))) == 1
 
 
+def test_explicit_recall_request_keeps_the_named_fact():
+    rows = activate("香菜的事还记得吗", (
+        _candidate("food", "用户对香菜过敏", 0.45),
+        _candidate("noise", "用户喜欢登山", 0.9),
+    ))
+    assert [row.candidate.key for row in rows] == ["food"]
+
+
 def test_sharing_question_keeps_subject_fact_and_applicable_boundary():
     rows = activate("可以告诉群友我的猫叫什么吗", (
         _candidate("name", "我养的猫叫年糕"),
@@ -45,3 +53,24 @@ def test_sharing_question_keeps_subject_fact_and_applicable_boundary():
     ), is_group=True)
     assert {row.candidate.key for row in rows} == {"name", "boundary"}
     assert next(row for row in rows if row.candidate.key == "boundary").decision == "CONSTRAIN"
+
+
+def test_emergency_access_rule_requires_emergency_context():
+    rows = activate("旧码还能进门吗", (
+        _candidate("normal", "旧码已作废，不能进门"),
+        _candidate("emergency", "漏水时也不能用旧码进门，应联系物业"),
+    ))
+    assert [row.candidate.key for row in rows] == ["normal"]
+    emergency = activate("门口有水声，能用旧码进门吗", (
+        _candidate("normal", "旧码已作废，不能进门"),
+        _candidate("emergency", "漏水或冒烟时也不能用旧码进门，应联系物业"),
+    ))
+    assert {row.candidate.key for row in emergency} == {"normal", "emergency"}
+
+
+def test_dinner_constraint_does_not_pull_pet_food_rule():
+    rows = activate("今晚做海鲜粥，能用共用海鲜汤底吗", (
+        _candidate("person", "最近按过敏处理，避开虾蟹贝和共用海鲜汤底"),
+        _candidate("pet", "猫吃三文鱼会挠脖子，不要买三文鱼罐头"),
+    ))
+    assert [row.candidate.key for row in rows] == ["person"]

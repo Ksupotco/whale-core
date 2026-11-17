@@ -9,7 +9,8 @@ from dataclasses import dataclass
 
 from whale_core.memory.relations import query_attributes, relation_hints
 from whale_core.memory.roles import (
-    access_relevance, boundary_relevance, constraint_relevance, memory_role,
+    access_relevance, boundary_relevance, constraint_relevance, lexical_overlap,
+    memory_role,
 )
 from whale_core.memory.task_plan import evidence_needs, plan_query
 
@@ -21,6 +22,7 @@ class MemoryCandidate:
     score: float
     source: str
     subject_id: str = "owner"
+    rerank_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,11 @@ def activate(query: str, candidates, *, limit: int = 8,
             requested.get(str(hint.get("entity")), set()) &
             set(str(hint.get("attribute") or "").split(","))
             for hint in hints)
+        minimum_overlap = (1 if any(word in query for word in
+                                    ("记得", "之前说", "曾经说")) else 2)
+        if (not coverage and not attribute_match
+                and lexical_overlap(candidate.summary, query) < minimum_overlap):
+            continue
         score = candidate.score + 0.35 * len(coverage) + 0.25 * attribute_match
         ranked.append((score, candidate, "USE",
                        "task_evidence" if coverage else "retrieval_evidence", coverage))
