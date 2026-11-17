@@ -19,6 +19,14 @@ to "I do not like coffee" can supersede the earlier fact even when the
 structured `value` is still "coffee". The existing evidence, authorization,
 revision, and correction-context checks still govern the transition.
 
+The benchmark adapter now keeps the benchmark speaker ID stable and records
+ingested turn IDs plus skipped turn IDs by reason. It does not convert contact
+speech into owner self statements. The offline contact coverage audit joins
+canonical state provenance only after prediction: among activation cases
+associated with dev samples, **59/63** require at least one state attributed
+to the contact speaker; the holdout figure is **81/82**. These are coverage
+flags, not predicted errors or official benchmark scores.
+
 ## Checks
 
 - Relevant owner-fact, retrieval, embedding, correction, forgetting, and group

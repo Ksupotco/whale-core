@@ -174,15 +174,32 @@ class OwnerFactAdapter:
         self.sessions = 0
         self.owner_turns = 0
         self.skipped_turns = 0
+        self.owner_speaker_id = ""
+        self.ingested_turn_ids: list[str] = []
+        self.skipped_turn_ids: dict[str, list[str]] = {
+            "unsupported_surface": [], "contact_without_product_writer": [],
+            "owner_identity_conflict": [],
+        }
+
+    def _skip(self, turn: dict[str, Any], reason: str) -> None:
+        self.skipped_turns += 1
+        self.skipped_turn_ids[reason].append(str(turn.get("turn_id") or ""))
 
     def ingest_session(self, session: dict[str, Any]) -> None:
         if session.get("surface") != "private_chat":
-            self.skipped_turns += len(session.get("turns") or ())
+            for turn in session.get("turns") or ():
+                self._skip(turn, "unsupported_surface")
             return
         for turn in session.get("turns") or ():
             if turn.get("speaker_role") != "user":
-                self.skipped_turns += 1
+                self._skip(turn, "contact_without_product_writer")
                 continue
+            speaker_id = str(turn.get("speaker_id") or "")
+            if self.owner_speaker_id and speaker_id != self.owner_speaker_id:
+                self._skip(turn, "owner_identity_conflict")
+                continue
+            if not self.owner_speaker_id:
+                self.owner_speaker_id = speaker_id
             evidence = UserEvidence(
                 evidence_id=str(turn.get("turn_id") or ""),
                 owner_id=self.sample_id, principal_id=PRINCIPAL,
@@ -195,6 +212,7 @@ class OwnerFactAdapter:
             )
             self.service.observe(evidence, self.auth)
             self.owner_turns += 1
+            self.ingested_turn_ids.append(evidence.evidence_id)
         if not self.worker.drain(timeout=600):
             raise RuntimeError("owner fact extraction did not drain")
         self.sessions += 1
@@ -217,6 +235,10 @@ class OwnerFactAdapter:
             "metadata": {
                 "adapter": "owner_fact_v1_product_pilot",
                 "owner_mapping": "benchmark user -> owner; private_chat only",
+                "owner_speaker_id": self.owner_speaker_id,
+                "ingested_turn_ids": list(self.ingested_turn_ids),
+                "skipped_turn_ids_by_reason": self.skipped_turn_ids,
+                "contact_writer": "unavailable",
                 "ingested_sessions": self.sessions,
                 "owner_turns": self.owner_turns,
                 "skipped_turns": self.skipped_turns,
