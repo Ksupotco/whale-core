@@ -241,6 +241,54 @@ class TestUnifiedSurface:
         assert health.connected is True
 
 
+class TestSyncBridge:
+    def test_run_sync_shares_one_loop_across_calls(self):
+        """常驻 gateway loop：多次 run_sync 复用同一 loop（transport 状态安全）。"""
+        from whale_core.devices.sync_bridge import gateway_loop, run_sync
+
+        async def probe():
+            return asyncio.get_running_loop()
+
+        loop_a = run_sync(probe())
+        loop_b = run_sync(probe())
+        assert loop_a is loop_b is gateway_loop()
+        assert loop_a.is_running()
+
+    def test_run_sync_inside_gateway_loop_rejected(self):
+        """gateway loop 内调 run_sync 必须拒绝（防自死锁）。"""
+        from whale_core.devices.sync_bridge import run_sync
+
+        async def inner():
+            return run_sync(asyncio.sleep(0))
+
+        # 在 gateway loop 上执行 inner：其中的 run_sync 应抛 RuntimeError
+        from whale_core.devices.sync_bridge import gateway_loop
+        loop = gateway_loop()
+        fut = asyncio.run_coroutine_threadsafe(
+            _expect_runtime_error(inner()), loop)
+        assert fut.result(timeout=10) is True
+
+    def test_run_sync_exception_propagates(self):
+        from whale_core.devices.sync_bridge import run_sync
+
+        async def boom():
+            raise ValueError("x")
+
+        try:
+            run_sync(boom())
+            raise AssertionError("应抛")
+        except ValueError:
+            pass
+
+
+async def _expect_runtime_error(coro) -> bool:
+    try:
+        await coro
+        return False
+    except RuntimeError:
+        return True
+
+
 class TestQueryRouting:
     def test_query_routes_to_transport_with_query_method(self):
         """query 统一入口：授权 + 能力匹配 + 委派通道 query。"""

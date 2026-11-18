@@ -119,6 +119,22 @@ def shell(token: str, device_id: str, command: str, key: str,
                 "idempotency_key": key, "timeout": timeout})
 
 
+def probe_lines(token: str, device_id: str, key: str) -> int:
+    """探针文件行数（ssh 通道 shell summary 为 JSON：stdout_tail 取数）。"""
+    status, body = shell(token, device_id, f"wc -l < {PROBE}", key)
+    receipt = body.get("result", {}).get("receipt", {})
+    summary = receipt.get("result", {}).get("summary", "")
+    try:
+        data = json.loads(summary)
+        return int(str(data.get("stdout_tail", "")).strip())
+    except (ValueError, AttributeError):
+        pass
+    try:
+        return int(str(summary).strip().split()[0])
+    except (ValueError, IndexError):
+        return -1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ssh-host", required=True)
@@ -155,6 +171,9 @@ def main() -> int:
     run_id = f"{int(time.time())}"
     key1 = f"recon:smoke:{run_id}:shell1"
 
+    # 2.5 探针文件归零（setup 步骤，不计入检查；多次运行互不污染）
+    shell(token, device_id, f": > {PROBE}", f"recon:smoke:{run_id}:reset")
+
     # 3. SSH 路由 shell 真实执行（探针追加一行）
     status, body = shell(token, device_id, f"echo MARK_{run_id} >> {PROBE}", key1)
     receipt = body.get("result", {}).get("receipt", {})
@@ -164,11 +183,8 @@ def main() -> int:
     action_id = receipt.get("action_id", "")
 
     # 设备侧证据：探针恰好 1 行
-    status, body = shell(token, device_id, f"wc -l < {PROBE}",
-                         f"recon:smoke:{run_id}:wc1")
-    out = body.get("result", {}).get("receipt", {}).get("result", {})
-    check("probe-written-once", str(out.get("summary", "")).strip().startswith("1"),
-          f"summary={out.get('summary')!r}")
+    lines = probe_lines(token, device_id, f"recon:smoke:{run_id}:wc1")
+    check("probe-written-once", lines == 1, f"lines={lines}")
 
     # 4. 重复幂等键 → duplicate，不重放
     status, body = shell(token, device_id,
@@ -178,12 +194,8 @@ def main() -> int:
           status == 200 and receipt2.get("duplicate") is True
           and receipt2.get("action_id") == action_id,
           f"duplicate={receipt2.get('duplicate')}")
-    status, body = shell(token, device_id, f"wc -l < {PROBE}",
-                         f"recon:smoke:{run_id}:wc2")
-    out = body.get("result", {}).get("receipt", {}).get("result", {})
-    check("no-replay-after-duplicate",
-          str(out.get("summary", "")).strip().startswith("1"),
-          f"summary={out.get('summary')!r}")
+    lines = probe_lines(token, device_id, f"recon:smoke:{run_id}:wc2")
+    check("no-replay-after-duplicate", lines == 1, f"lines={lines}")
 
     # 5. 重启对账
     print("[info] systemctl restart whale-api …")
@@ -205,15 +217,29 @@ def main() -> int:
     check("restart-duplicate-no-replay",
           status == 200 and receipt3.get("duplicate") is True,
           f"duplicate={receipt3.get('duplicate')}")
-    status, body = shell(token, device_id, f"wc -l < {PROBE}",
-                         f"recon:smoke:{run_id}:wc3")
-    out = body.get("result", {}).get("receipt", {}).get("result", {})
-    check("probe-still-once",
-          str(out.get("summary", "")).strip().startswith("1"),
-          f"summary={out.get('summary')!r}")
+    lines = probe_lines(token, device_id, f"recon:smoke:{run_id}:wc3")
+    check("probe-still-once", lines == 1, f"lines={lines}")
+    # 终极证据：探针里绝不含 SHOULD_NEVER_APPEND（三次重复键全程未重放）
+    status, body = shell(token, device_id,
+                         f"grep -c SHOULD_NEVER_APPEND {PROBE} || true",
+                         f"recon:smoke:{run_id}:wc4")
+    summary = body.get("result", {}).get("receipt", {}).get(
+        "result", {}).get("summary", "")
+    bad = -1
+    try:
+        bad = int(json.loads(summary).get("stdout_tail", "-1").strip())
+    except (ValueError, AttributeError):
+        pass
+    check("never-replayed-marker-absent", bad == 0, f"bad_lines={bad}")
 
-    # 6. ADB 通道故障/恢复（可选）
+    # 6. ADB 通道故障/恢复（可选）。注意：adb disconnect 会被 transport 的
+    # 懒重连自愈——真实故障须停掉端侧 adbd（经正交 SSH 通道）。
     if args.adb_serial:
+        ssh_base = ["ssh", "-i", args.ssh_key, "-o", "BatchMode=yes",
+                    "-o", "ConnectTimeout=8",
+                    f"{args.ssh_user}@{args.ssh_host}"]
+        subprocess.run(ssh_base + ["stop adbd"], check=False)
+        time.sleep(2)
         subprocess.run(["adb", "disconnect", args.adb_serial], check=False)
         key_fail = f"recon:smoke:{run_id}:applist-down"
         status, body = api(token, "POST",
@@ -228,6 +254,8 @@ def main() -> int:
               f"error={receipt_fail.get('error_code')}")
         fail_action_id = receipt_fail.get("action_id", "")
 
+        subprocess.run(ssh_base + ["start adbd"], check=False)
+        time.sleep(3)
         subprocess.run(["adb", "connect", args.adb_serial], check=False)
         time.sleep(2)
         key_ok = f"recon:smoke:{run_id}:applist-up"
