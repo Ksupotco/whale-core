@@ -32,7 +32,7 @@ def test_status_words_are_honest():
     _put_task(store, "t1", conv="c", phase="failed", goal="抢演唱会门票")
     hint = render_activity_hint(store, "c")
     assert "没做成" in hint and "完成了" not in hint.split("没做成")[0].split("票")[-1]
-    assert "别装成完成了" in hint  # 给模型的诚实约束
+    assert "按真实状态说" in hint  # 诚实约束保留在头行（2026-11-18 起方式尾句已删）
 
 
 def test_empty_store_renders_nothing():
