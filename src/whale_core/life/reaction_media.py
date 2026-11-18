@@ -164,3 +164,53 @@ class ReactionMediaStore:
             return blob[1] if isinstance(blob, tuple) else blob
         except Exception:
             return None
+
+
+def planning_hint_with_reactions(base_hint: str, store: ReactionMediaStore,
+                                 *, max_tags: int = 30) -> str:
+    """回复规划提示（动态）：静态标记协议 + 素材非空时的反应图条款。
+
+    模型只提语义意图（[[表情:标签]]），标签词表来自**真实素材库**——
+    库空则不挂该条款（模型不知道不等于漏功能；不诱导写永远配不上的标记）。
+    文案与 2026-11-18 prompts 线定稿逐字一致（只留机制说明，不规定频率）。
+    """
+    try:
+        tags = sorted({t for m in store.list() for t in m.tags})
+    except Exception:  # noqa: BLE001 — 提示构建失败不阻塞聊天
+        tags = []
+    if not tags:
+        return base_hint
+    return base_hint + (
+        "\n想在文字之外配一张应景的表情图时，可以在回复结尾写 "
+        "[[表情:标签]]（只能从现有素材标签里挑："
+        + "/".join(tags[:max_tags]) + "）；有匹配素材才会真的发出去。")
+
+
+def send_reaction_for_plan(store: ReactionMediaStore, plan, *,
+                           conversation_id: str, persona_id: str,
+                           send_image) -> str:
+    """模型反应图意图 → 选图 → 读字节 → 经既有通道发送（#57 收口辅助）。
+
+    返回状态词（观测/测试用，调用方可忽略）：
+    ``sent`` / ``skipped:no-tag`` / ``skipped:no-match`` /
+    ``skipped:read-failed`` / ``skipped:send-failed`` / ``skipped:send-error``。
+    任何失败都安静退回纯文字：不重发、不抛异常、不补画。
+    """
+    tag = str(getattr(plan, "reaction_tag", "") or "").strip()
+    if not tag:
+        return "skipped:no-tag"
+    try:
+        media = store.pick((tag,), persona_id=persona_id,
+                           conversation_id=conversation_id)
+    except Exception:  # noqa: BLE001 — 选取故障视同无素材
+        return "skipped:no-match-or-rate-limited"
+    if media is None:
+        return "skipped:no-match-or-rate-limited"
+    data = store.read_bytes(media)
+    if not data:
+        return "skipped:read-failed"
+    try:
+        ok = bool(send_image(data, media))
+    except Exception:  # noqa: BLE001 — 通道异常退回文字
+        return "skipped:send-error"
+    return "sent" if ok else "skipped:send-failed"

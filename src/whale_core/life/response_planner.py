@@ -13,7 +13,10 @@
 标记约定（注入到人格层提示，见 PLANNING_HINT）：
 - 气泡分隔：单独一行 ``◆``；
 - 沉默：回复以 ``[[沉默]]`` 开头（正文其余内容丢弃）；
-- 稍后补充：结尾 ``[[稍后补充:原因]`` 或 ``[[稍后补充：原因]]``。
+- 稍后补充：结尾 ``[[稍后补充:原因]`` 或 ``[[稍后补充：原因]]``；
+- 反应图意图：``[[表情:标签]]``（issue #57；解析为 ReplyPlan.reaction_tag，
+  选图/去重/频控由素材层完成。此条款不进静态 PLANNING_HINT——由宿主
+  在素材库非空时动态挂入，见 reaction_media.planning_hint_with_reactions）。
 """
 
 from __future__ import annotations

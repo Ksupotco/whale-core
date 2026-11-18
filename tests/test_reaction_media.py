@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import pytest
 
-from whale_core.life.reaction_media import ReactionMediaStore
+from whale_core.life.reaction_media import (
+    ReactionMediaStore,
+    planning_hint_with_reactions,
+    send_reaction_for_plan,
+)
 from whale_core.life.response_planner import plan_reply
 from whale_core.memory.store import InMemoryStore
 
@@ -137,6 +141,86 @@ def test_artifact_retention_override(tmp_path):
     import pytest as _pt
     with _pt.raises(ValueError):
         arts.save_bytes(b"z" * 10, "image/png", retention_s=-1)
+
+
+class TestPlanningHint:
+    def test_empty_library_keeps_base_hint(self):
+        ms, _ = _store()
+        assert planning_hint_with_reactions("BASE", ms) == "BASE"
+
+    def test_library_tags_injected(self):
+        ms, _ = _store()
+        ms.add("art-1", ("开心", "庆祝"))
+        ms.add("art-2", ("无语",))
+        hint = planning_hint_with_reactions("BASE", ms)
+        assert hint.startswith("BASE")
+        assert "[[表情:标签]]" in hint
+        # prompts 线定稿措辞：标签池是硬约束、有匹配才真发
+        assert "只能从现有素材标签里挑" in hint
+        assert "有匹配素材才会真的发出去" in hint
+        # 标签池按码位排序后 / 连接
+        assert "庆祝/开心/无语" in hint
+
+    def test_tags_capped(self):
+        ms, _ = _store()
+        ms.add("art-1", tuple(f"标签{i:03d}" for i in range(40)))
+        hint = planning_hint_with_reactions("BASE", ms, max_tags=30)
+        assert "标签029" in hint and "标签030" not in hint
+
+
+class _Plan:
+    def __init__(self, tag=""):
+        self.reaction_tag = tag
+
+
+class TestSendReaction:
+    def test_no_tag_skipped(self):
+        ms, _ = _store()
+        ms.add("art-1", ("开心",))
+        calls = []
+        out = send_reaction_for_plan(ms, _Plan(""), conversation_id="c",
+                                     persona_id="", send_image=lambda d, m: calls.append(d) or True)
+        assert out == "skipped:no-tag" and calls == []
+
+    def test_sent(self):
+        ms, _ = _store()
+        ms.add("art-1", ("开心",))
+        sent = []
+        out = send_reaction_for_plan(ms, _Plan("开心"), conversation_id="c",
+                                     persona_id="",
+                                     send_image=lambda d, m: sent.append((d, m)) or True)
+        assert out == "sent"
+        assert sent == [(b"img1", ms.list()[0])]
+
+    def test_no_match_skipped(self):
+        ms, _ = _store()
+        ms.add("art-1", ("开心",))
+        out = send_reaction_for_plan(ms, _Plan("委屈"), conversation_id="c",
+                                     persona_id="", send_image=lambda d, m: True)
+        assert out.startswith("skipped")
+
+    def test_read_failed_skipped(self):
+        ms, _ = _store()
+        ms.add("art-1", ("开心",))
+        ms.artifacts._blobs.clear()
+        out = send_reaction_for_plan(ms, _Plan("开心"), conversation_id="c",
+                                     persona_id="", send_image=lambda d, m: True)
+        assert out == "skipped:read-failed"
+
+    def test_send_failed_and_error_skipped(self):
+        ms, _ = _store()
+        ms.add("art-1", ("开心",))
+        out = send_reaction_for_plan(ms, _Plan("开心"), conversation_id="c",
+                                     persona_id="", send_image=lambda d, m: False)
+        assert out == "skipped:send-failed"
+
+        def boom(d, m):
+            raise RuntimeError("channel down")
+        ms2, _ = _store()
+        ms2.add("art-1", ("开心",))
+        out = send_reaction_for_plan(ms2, _Plan("开心"), conversation_id="c",
+                                     persona_id="", send_image=boom)
+        assert out == "skipped:send-error"
 
 
 def test_has_sha256_dedup():
