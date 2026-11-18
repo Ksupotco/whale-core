@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -23,6 +24,10 @@ from whale_core.memory.curation import MemoryCurator
 from whale_core.memory.store import MemoryStore
 
 REPLY_CHANNEL = "direct_message"
+
+#: 无引用指代看图的触发词（2026-11-18 扩展兜底，Tob 批准：「这个图/这图/
+#: 上图/这张图/评价下」——指向明确才补读他人近期图，否则不猜）。
+_RECENT_IMAGE_DEICTIC_RE = re.compile(r"这个图|这图|上图|这张图|评价下")
 
 
 def _default_media_roots() -> tuple[str, ...]:
@@ -361,6 +366,35 @@ class QqInboundWorkflow:
             got = self._read_msgimg(mid)
             if got:
                 return got
+        # 2026-11-18 扩展（Tob 批准）：同发送者无命中时——群聊且当前消息含
+        # 指代词，且窗口内全群仅一张带图消息（任何群友）→ 补读那张；
+        # 多张/零张不猜（返回空，由人格诚实说看不到/问哪张）。
+        if conv.startswith("group:"):
+            text_now = str(getattr(event, "text", "") or "")
+            if _RECENT_IMAGE_DEICTIC_RE.search(text_now):
+                try:
+                    from whale_core.memory.timeline import GroupTimelineStore
+                    cands: list[str] = []
+                    for e in GroupTimelineStore(self.store).recent(conv, limit=8):
+                        if not isinstance(e, dict):
+                            continue
+                        mid2 = str(e.get("message_id") or "")
+                        if not mid2:
+                            continue
+                        try:
+                            ts2 = float(e.get("send_time") or 0)
+                        except (TypeError, ValueError):
+                            ts2 = 0
+                        if not ts2 or now - ts2 > window_s:
+                            continue
+                        if self.store.get(f"msgimg:{mid2}"):
+                            cands.append(mid2)
+                    if len(cands) == 1:
+                        got = self._read_msgimg(cands[0])
+                        if got:
+                            return got
+                except Exception:
+                    pass
         return ()
 
     def _topic_open_pending(self, event: OwnerEvent, text: str) -> None:

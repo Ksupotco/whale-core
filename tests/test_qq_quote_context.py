@@ -158,6 +158,60 @@ def test_quote_id_space_mismatch_falls_back_to_sender_recency():
     assert "霜桐" in note and images == ((PNG, "image/png"),)
 
 
+# ---------------------------------------------------------------------------
+# 2026-11-18 扩展（Tob 批准）：同发送者无命中时，窗口内全群仅一张带图消息
+# + 指代词 → 补读他人图；多张/超窗/无指代词不猜。
+# ---------------------------------------------------------------------------
+
+
+def test_recent_peer_image_other_sender_single_pic_with_deictic():
+    """他人单图 + 指代词（评价下这个图）→ 补读那张。"""
+    store = InMemoryStore()
+    tl = GroupTimelineStore(store)
+    _plant_image(store, "m-theirs")
+    tl.append(GROUP, message_id="m-theirs", sender_id="3510294135",
+              text="[pic]", send_time=str(time.time() - 120))
+    wf = _wf(store)
+    images = wf._recent_peer_image(_ev(text="@Enxi 评价下这个图"))
+    assert images == ((PNG, "image/png"),)
+
+
+def test_recent_peer_image_multiple_pics_no_guess():
+    """窗口内多张带图消息 → 不猜，返回空（诚实说看不到）。"""
+    store = InMemoryStore()
+    tl = GroupTimelineStore(store)
+    _plant_image(store, "m-p1")
+    _plant_image(store, "m-p2")
+    tl.append(GROUP, message_id="m-p1", sender_id="3510294135",
+              text="[pic]", send_time=str(time.time() - 100))
+    tl.append(GROUP, message_id="m-p2", sender_id="3757951060",
+              text="[pic]", send_time=str(time.time() - 60))
+    wf = _wf(store)
+    assert wf._recent_peer_image(_ev(text="评价下这个图")) == ()
+
+
+def test_recent_peer_image_other_sender_out_of_window():
+    """他人图但超出 180s 窗口 → 不补。"""
+    store = InMemoryStore()
+    tl = GroupTimelineStore(store)
+    _plant_image(store, "m-old")
+    tl.append(GROUP, message_id="m-old", sender_id="3510294135",
+              text="[pic]", send_time=str(time.time() - 600))
+    wf = _wf(store)
+    assert wf._recent_peer_image(_ev(text="评价下这个图")) == ()
+
+
+def test_recent_peer_image_other_sender_without_deictic():
+    """无指代词（只喊名字）→ 不补读他人图。"""
+    store = InMemoryStore()
+    tl = GroupTimelineStore(store)
+    _plant_image(store, "m-theirs")
+    tl.append(GROUP, message_id="m-theirs", sender_id="3510294135",
+              text="[pic]", send_time=str(time.time() - 60))
+    wf = _wf(store)
+    assert wf._recent_peer_image(_ev(text="@Enxi 吃了吗")) == ()
+
+
 def test_quote_fallback_picks_latest_image_from_quoted_sender():
     """被引用者发过多张图：回落取最近的一张。"""
     store = InMemoryStore()
