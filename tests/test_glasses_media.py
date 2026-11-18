@@ -70,7 +70,9 @@ class _OnlineVoicePort:
         self.last_receipt = {"ok": True}
 
     def _get(self, path, *, auth=True):
-        return 200, {"result": {"data": {"json": {"online": True}}}}
+        # 2026-11-18 探测口径对齐：getGroupAlbumAccessState 的 qqOnline+attachEnabled
+        return 200, {"result": {"data": {"json": {
+            "qqOnline": True, "attachEnabled": True}}}}
 
     def send_voice_to(self, peer_type, target, wav_bytes, *,
                       filename="voice.wav"):
