@@ -80,8 +80,9 @@ def probe_weq_qq_online(port) -> bool:
     login = getattr(port, "login", None)
     cookie = getattr(port, "_cookie", None)
     if not callable(get):
-        # 无查询能力的端口（非 WeQ 形态）：维持进程启发兜底。
-        return _fallback_qq_process_online()
+        # 无查询能力的端口：fail-closed（进程启发「有 QQ 进程 ≠ 可发」，
+        # 2026-11-18 起弃用，不确定一律不当在线）。
+        return False
     try:
         if cookie is None and callable(login):
             login()
@@ -100,15 +101,8 @@ def probe_weq_qq_online(port) -> bool:
 
 
 def _fallback_qq_process_online() -> bool:
-    """无 WeQ 查询面时的弱启发：本机是否有 QQ 进程（不保证可发送）。"""
-    try:
-        import subprocess
-        out = subprocess.check_output(
-            ["pgrep", "-f", r"/opt/QQ/qq|/opt/QQ/QQ|QQ\.exe"],
-            stderr=subprocess.DEVNULL, text=True, timeout=3)
-        return bool(out.strip())
-    except Exception:
-        return False
+    """已弃用（2026-11-18）：进程存在 ≠ 可发送，保留空壳仅防外部引用断裂。"""
+    return False
 
 
 class ResultDelivery:

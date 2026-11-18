@@ -70,7 +70,7 @@ class _OnlineVoicePort:
         self.last_receipt = {"ok": True}
 
     def _get(self, path, *, auth=True):
-        # 2026-11-18 探测口径对齐：getGroupAlbumAccessState 的 qqOnline+attachEnabled
+        # 新探测口径（2026-11-18）：qqOnline && attachEnabled
         return 200, {"result": {"data": {"json": {
             "qqOnline": True, "attachEnabled": True}}}}
 
