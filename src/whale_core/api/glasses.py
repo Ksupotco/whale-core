@@ -176,7 +176,7 @@ class GlassesConfig:
         self.weq_token = (env.get("WEQ_WEB_TOKEN") or "").strip()
         self.self_uin = (env.get("QQ_SELF_UIN") or "").strip()
         self.window_state = (env.get("QQ_FULLMODE_STATE_FILE")
-                             or "/tmp/whale-fullmode-send.ts").strip()
+                             or "/opt/whale/state/fullmode_window.ts").strip()
 
     def missing(self) -> list[str]:
         out = []
@@ -741,16 +741,13 @@ def build_delegates(env: dict, *, brain_factory=None, quick_brain_factory=None,
 
     if send_port_factory is None:
         def send_port_factory():
-            from weq_channel.full_mode_window import FullModeWindow, WindowedSendPort
             from weq_channel.weq_send import WeQWebSendPort
             port = WeQWebSendPort(cfg.weq_url, cfg.weq_token,
                                   target_uid=cfg.owner_uid,
                                   expected_account_uin=cfg.self_uin or None)
-            if os.environ.get("QQ_FULLMODE_ONDEMAND", "").strip() == "1":
-                window = FullModeWindow(cfg.weq_url, cfg.weq_token,
-                                        state_file=cfg.window_state)
-                port = WindowedSendPort(port, window)
-            return port
+            return _maybe_windowed_port(
+                port, env, weq_url=cfg.weq_url, weq_token=cfg.weq_token,
+                window_state=cfg.window_state)
 
     def qq_send(text: str) -> tuple[bool, str]:
         port = send_port_factory()
@@ -991,6 +988,22 @@ def build_delegates(env: dict, *, brain_factory=None, quick_brain_factory=None,
             # 重复 build_delegates 不得遗留后台 worker 线程。
             "owner_fact_shutdown": _of_stack.shutdown,
             "env": env}
+
+
+def _maybe_windowed_port(port, env, *, weq_url: str, weq_token: str,
+                         window_state: str):
+    """按需完整模式窗口包装（QQ_FULLMODE_ONDEMAND=1）。
+
+    2026-11-18 修复：判定读传入的 env 映射（含 --secrets 文件），不再读
+    os.environ——secrets 文件只进 env dict，读 os.environ 会让本服务永远
+    装不上窗口，关窗态发送被 weq-web 以「完全离线模式」拒绝（qq runner 走
+    os.environ 不受影响）。state_file 与 qq runner 同默认（跨进程协调只靠它）。
+    """
+    if (env.get("QQ_FULLMODE_ONDEMAND") or "").strip() == "1":
+        from weq_channel.full_mode_window import FullModeWindow, WindowedSendPort
+        window = FullModeWindow(weq_url, weq_token, state_file=window_state)
+        return WindowedSendPort(port, window)
+    return port
 
 
 def _persona_card_text(store, persona_id=None) -> str:

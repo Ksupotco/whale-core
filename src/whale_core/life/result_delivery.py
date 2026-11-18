@@ -65,36 +65,35 @@ def _unwrap_send_port(port):
 
 
 def probe_weq_qq_online(port) -> bool:
-    """以 weq-web 实际可发能力为准：QQ 在线 **且** attach 可用（非完全离线模式）。
+    """以本部署（按需完整模式窗口）真实可发规则为准：**QQ 在线即可发**。
 
-    2026-11-18 对齐：旧口径 ``groupFeedback.status.online`` 只反映 QQ 进程在线，
-    「完全离线模式」（autoAttachQq 关）下进程在线但发送必被
-    ``requireQqOnlineForAlbum`` 拒——探测与实发口径不一致（判 online=true 却
-    send_failed）。新口径改读 ``account.getGroupAlbumAccessState`` 的
-    ``qqOnline && attachEnabled``，与 sendElements 门完全同源。
-    端点缺失/探测失败/形状不明一律 False（fail-closed：走回落路径，
-    不假装在线硬发）。
+    2026-11-18 对齐魔改版发送门：完整模式是按需开窗（full_mode_window：
+    发送前 ``setAutoAttachQq(true)`` → 轮询就绪 → 发，空闲自动关）——
+    静止态 attachEnabled=false 是**设计常态**，不代表不可发。发送的最终
+    前提是 QQ 进程在线（record.qqOnline && qqPid），即
+    ``groupFeedback.status.online``；开窗失败不阻断发送尝试、如实记账。
+    探测失败/端点缺失/形状不明/无查询能力一律 False（fail-closed：
+    走回落路径，不假装在线硬发）。
     """
     port = _unwrap_send_port(port)
     get = getattr(port, "_get", None)
     login = getattr(port, "login", None)
     cookie = getattr(port, "_cookie", None)
     if not callable(get):
-        # 无查询能力的端口：fail-closed（进程启发「有 QQ 进程 ≠ 可发」，
-        # 2026-11-18 起弃用，不确定一律不当在线）。
+        # 无查询能力的端口：fail-closed（不确定 = 不当在线）。
         return False
     try:
         if cookie is None and callable(login):
             login()
-        status, body = get("/trpc/account.getGroupAlbumAccessState", auth=True)
+        status, body = get("/trpc/groupFeedback.status", auth=True)
         if status == 401 and callable(login):
             login()
-            status, body = get("/trpc/account.getGroupAlbumAccessState", auth=True)
+            status, body = get("/trpc/groupFeedback.status", auth=True)
         if status != 200 or not isinstance(body, dict):
             return False
         data = ((body.get("result") or {}).get("data") or {}).get("json")
         if isinstance(data, dict):
-            return bool(data.get("qqOnline")) and bool(data.get("attachEnabled"))
+            return bool(data.get("online"))
     except Exception as exc:
         log.warning("qq online probe failed: %s", type(exc).__name__)
     return False

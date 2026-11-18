@@ -98,13 +98,13 @@ def test_offline_whale_failure_falls_back_to_stub_log():
     assert any(r.channel == "stub_log" for r in receipts)
 
 
-# ---------- 探测口径（2026-11-18 对齐 weq-web 实际可发能力） ----------
+# ---------- 探测口径（2026-11-18 对齐按需开窗魔改版：QQ 在线即可发） ----------
 
 from whale_core.life.result_delivery import probe_weq_qq_online
 
 
 class CapabilityPort(FakePort):
-    """模拟 weq-web 两态的桩：_get 回 getGroupAlbumAccessState 形状。"""
+    """模拟 weq-web 两态的桩：_get 回 groupFeedback.status 形状。"""
 
     def __init__(self, payload, status=200):
         super().__init__()
@@ -113,38 +113,38 @@ class CapabilityPort(FakePort):
         self._cookie = "s"  # 跳过 login
 
     def _get(self, path, *, auth=True):
-        assert path == "/trpc/account.getGroupAlbumAccessState"
+        assert path == "/trpc/groupFeedback.status"
         if isinstance(self._payload, Exception):
             raise self._payload
         return self._status, {"result": {"data": {"json": self._payload}}}
 
 
-def test_probe_online_requires_qq_online_and_attach_enabled():
-    assert probe_weq_qq_online(
-        CapabilityPort({"qqOnline": True, "attachEnabled": True})) is True
+def test_probe_online_when_qq_online():
+    """QQ 进程在线即可发（窗口发送前自动开；attach 静止关闭是设计常态）。"""
+    assert probe_weq_qq_online(CapabilityPort({"online": True})) is True
 
 
-def test_probe_offline_mode_means_not_online():
-    """完全离线模式：QQ 进程在线但 attach 关 → 判离线（走回落不误判）。"""
-    assert probe_weq_qq_online(
-        CapabilityPort({"qqOnline": True, "attachEnabled": False})) is False
-    assert probe_weq_qq_online(
-        CapabilityPort({"qqOnline": False, "attachEnabled": True})) is False
+def test_probe_offline_when_qq_offline():
+    assert probe_weq_qq_online(CapabilityPort({"online": False})) is False
 
 
 def test_probe_fail_closed_on_error_or_unknown_shape():
     assert probe_weq_qq_online(
         CapabilityPort(ConnectionError("down"))) is False          # 探测失败
     assert probe_weq_qq_online(
-        CapabilityPort({"online": True})) is False                 # 旧形状不再认
+        CapabilityPort({"qqOnline": True})) is False               # 形状不明
     assert probe_weq_qq_online(
         CapabilityPort({}, status=404)) is False                   # 端点缺失
-    assert probe_weq_qq_online(
-        CapabilityPort({"qqOnline": True})) is False               # 缺 attachEnabled
+
+
+def test_probe_fail_closed_without_query_capability():
+    class NoQueryPort(FakePort):
+        pass
+    assert probe_weq_qq_online(NoQueryPort()) is False             # 无 _get
 
 
 def test_deliver_online_prefers_qq_via_real_probe():
-    port = CapabilityPort({"qqOnline": True, "attachEnabled": True})
+    port = CapabilityPort({"online": True})
     d = ResultDelivery(port, owner_uid="u_owner")  # 默认走真实探针
     receipts = d.deliver([DeliveryItem(kind="text", text="在线")])
     assert receipts[0].channel == "qq_c2c" and receipts[0].ok
@@ -152,7 +152,7 @@ def test_deliver_online_prefers_qq_via_real_probe():
 
 
 def test_deliver_offline_mode_does_not_pick_qq():
-    port = CapabilityPort({"qqOnline": True, "attachEnabled": False})
+    port = CapabilityPort({"online": False})
     d = ResultDelivery(port, owner_uid="u_owner")
     receipts = d.deliver([DeliveryItem(kind="text", text="离线")])
     assert all(r.channel != "qq_c2c" for r in receipts)

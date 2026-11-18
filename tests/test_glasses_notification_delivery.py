@@ -4,9 +4,8 @@ from whale_core.notifications.gateway import NotificationGateway
 
 class OfflineWeQPort:
     def _get(self, path, *, auth=True):
-        # 新口径（2026-11-18）：qqOnline && attachEnabled（完全离线模式=false）
-        return 200, {"result": {"data": {"json": {
-            "qqOnline": False, "attachEnabled": False}}}}
+        # 口径（2026-11-18 按需开窗版）：groupFeedback.status.online=QQ 在线
+        return 200, {"result": {"data": {"json": {"online": False}}}}
 
 
 def test_glasses_result_delivery_queues_whale_notification_when_qq_offline(tmp_path):
@@ -84,8 +83,7 @@ class OnlineVoicePort:
         self.last_receipt = {"ok": True}
 
     def _get(self, path, *, auth=True):
-        return 200, {"result": {"data": {"json": {
-            "qqOnline": True, "attachEnabled": True}}}}
+        return 200, {"result": {"data": {"json": {"online": True}}}}
 
     def send_voice_to(self, peer_type, target, wav_bytes, *, filename="voice.wav"):
         self.voice_calls.append((peer_type, target, len(wav_bytes), filename))
@@ -133,6 +131,33 @@ def test_delivery_note_persona_texts():
     assert _delivery_note({"ok": True}, [{"kind": "image"}]) == "图发你手机上了，看看~"
     assert _delivery_note({"ok": True}, [{"kind": "text"}]) == "说了哦，看看手机~"
     assert "没发出去" in _delivery_note({"ok": False}, [{"kind": "text"}])
+
+
+# ---------- 按需完整模式窗口接线（2026-11-18：读 env dict 而非 os.environ） ----------
+
+def test_window_wraps_when_enabled_in_env_dict():
+    from whale_core.api.glasses import _maybe_windowed_port
+    from weq_channel.full_mode_window import WindowedSendPort
+    port = object()
+    wrapped = _maybe_windowed_port(
+        port, {"QQ_FULLMODE_ONDEMAND": "1"}, weq_url="http://127.0.0.1:7690",
+        weq_token="t", window_state="/tmp/w.ts")
+    assert isinstance(wrapped, WindowedSendPort)
+
+
+def test_window_not_wrapped_when_disabled():
+    from whale_core.api.glasses import _maybe_windowed_port
+    port = object()
+    assert _maybe_windowed_port(
+        port, {}, weq_url="http://127.0.0.1:7690", weq_token="t",
+        window_state="/tmp/w.ts") is port
+
+
+def test_window_state_default_shared_with_qq_runner():
+    """跨进程协调只靠 state_file：glasses 默认与 qq runner 同一文件。"""
+    from whale_core.api.glasses import GlassesConfig
+    from weq_channel.full_mode_window import STATE_FILE_DEFAULT
+    assert GlassesConfig({}).window_state == STATE_FILE_DEFAULT
 
 
 def test_delivery_note_model_first_then_fallback():
