@@ -65,29 +65,35 @@ def _unwrap_send_port(port):
 
 
 def probe_weq_qq_online(port) -> bool:
-    """经 WeQ ``groupFeedback.status`` 探测本机 QQ 是否在线。
+    """以 weq-web 实际可发能力为准：QQ 在线 **且** attach 可用（非完全离线模式）。
 
-    失败（网络/未登录）视为离线——投递会走手机侧兜底，不假装在线硬发。
+    2026-11-18 对齐：旧口径 ``groupFeedback.status.online`` 只反映 QQ 进程在线，
+    「完全离线模式」（autoAttachQq 关）下进程在线但发送必被
+    ``requireQqOnlineForAlbum`` 拒——探测与实发口径不一致（判 online=true 却
+    send_failed）。新口径改读 ``account.getGroupAlbumAccessState`` 的
+    ``qqOnline && attachEnabled``，与 sendElements 门完全同源。
+    端点缺失/探测失败/形状不明一律 False（fail-closed：走回落路径，
+    不假装在线硬发）。
     """
     port = _unwrap_send_port(port)
     get = getattr(port, "_get", None)
     login = getattr(port, "login", None)
     cookie = getattr(port, "_cookie", None)
     if not callable(get):
-        # 无查询能力时：改用进程启发（/opt/QQ/qq）。
+        # 无查询能力的端口（非 WeQ 形态）：维持进程启发兜底。
         return _fallback_qq_process_online()
     try:
         if cookie is None and callable(login):
             login()
-        status, body = get("/trpc/groupFeedback.status", auth=True)
+        status, body = get("/trpc/account.getGroupAlbumAccessState", auth=True)
         if status == 401 and callable(login):
             login()
-            status, body = get("/trpc/groupFeedback.status", auth=True)
+            status, body = get("/trpc/account.getGroupAlbumAccessState", auth=True)
         if status != 200 or not isinstance(body, dict):
             return False
         data = ((body.get("result") or {}).get("data") or {}).get("json")
         if isinstance(data, dict):
-            return bool(data.get("online"))
+            return bool(data.get("qqOnline")) and bool(data.get("attachEnabled"))
     except Exception as exc:
         log.warning("qq online probe failed: %s", type(exc).__name__)
     return False

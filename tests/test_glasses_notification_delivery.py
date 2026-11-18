@@ -4,7 +4,9 @@ from whale_core.notifications.gateway import NotificationGateway
 
 class OfflineWeQPort:
     def _get(self, path, *, auth=True):
-        return 200, {"result": {"data": {"json": {"online": False}}}}
+        # 新口径（2026-11-18）：qqOnline && attachEnabled（完全离线模式=false）
+        return 200, {"result": {"data": {"json": {
+            "qqOnline": False, "attachEnabled": False}}}}
 
 
 def test_glasses_result_delivery_queues_whale_notification_when_qq_offline(tmp_path):
@@ -82,7 +84,8 @@ class OnlineVoicePort:
         self.last_receipt = {"ok": True}
 
     def _get(self, path, *, auth=True):
-        return 200, {"result": {"data": {"json": {"online": True}}}}
+        return 200, {"result": {"data": {"json": {
+            "qqOnline": True, "attachEnabled": True}}}}
 
     def send_voice_to(self, peer_type, target, wav_bytes, *, filename="voice.wav"):
         self.voice_calls.append((peer_type, target, len(wav_bytes), filename))
