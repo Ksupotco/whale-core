@@ -942,10 +942,31 @@ def build_delegates(env: dict, *, brain_factory=None, quick_brain_factory=None,
         except (TypeError, ValueError):
             _bg_timeout = None
 
+        # notify_user 三通道（目标全部宿主绑定，绝不从模型文本推导）：
+        # glasses→deliver_result 卡片路径 / qq→绑定对端 / phone→注册表设备 notify
+        from whale_core.api.glasses_agent import NotifyUserGateway
+
+        def _notify_deliver(text: str):
+            result = deliver_result([{"kind": "text", "text": text}],
+                                    summary="notify_user")
+            return bool(result.get("ok")), json.dumps(
+                result, ensure_ascii=False)[:180]
+
+        def _notify_phone(text: str):
+            from whale_core.life.result_delivery import DeliveryItem
+            receipts = _whale_push([DeliveryItem(kind="text", text=text)],
+                                   conversation="owner", summary="notify_user")
+            ok = any(getattr(r, "ok", False) for r in receipts)
+            detail = ";".join(f"{getattr(r, 'channel', '?')}:{getattr(r, 'detail', '')}"
+                              for r in receipts)
+            return ok, (detail or "no_device")[:180]
+
         agent = GlassesAgent(
             store=store,
             chat=_agent_chat,
             workspace=_AgentPath(cfg.store_path).parent / "workspace",
+            notify_gateway=NotifyUserGateway(
+                deliver=_notify_deliver, qq=qq_send, phone=_notify_phone),
             # 软限转后台的结果经统一投递链路推送（QQ/通知/补传口径不变）
             deliver=lambda text, session_id: deliver_result(
                 [{"kind": "text", "text": text}],

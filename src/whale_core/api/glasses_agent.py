@@ -38,6 +38,9 @@ import subprocess
 import threading
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 MAX_TEXT_CHARS = 4000
 MAX_EXACT_CHARS = 2000          # 与 shell_policy.MAX_COMMAND_CHARS 对齐
@@ -155,8 +158,8 @@ class PendingConfirms:
 # ---------------------------------------------------------------------------
 # 台账（风格对齐 ShellPolicy.audit：只记摘要，不记原始输出）
 # ---------------------------------------------------------------------------
-def _c200(value) -> str:
-    return str(value)[:200] if value is not None else ""
+def _c200(value, limit: int = 200) -> str:
+    return str(value)[:limit] if value is not None else ""
 
 
 class StoreLedger:
@@ -360,6 +363,140 @@ class SelfModifier:
 
 
 # ---------------------------------------------------------------------------
+# notify_user：只读可逆通知工具（免两阶段确认直接执行；urgency 不提权只影响展示；
+# 目标绝不从模型文本推导——通道对端全部宿主装配时绑定）
+# ---------------------------------------------------------------------------
+NOTIFY_TEXT_MAX = 500
+NOTIFY_CHANNELS = ("glasses", "qq", "phone", "auto")
+NOTIFY_URGENCIES = ("low", "normal", "high")
+NOTIFY_PER_TURN = 3
+NOTIFY_PER_HOUR = 10
+NOTIFY_PER_DAY = 30
+
+_NOTIFY_RE = re.compile(r"^notify(?:\[([^\]]*)\])?\s*[:：]\s*(.*)$", re.S | re.I)
+_NOTIFY_NL_PREFIXES = ("提醒我", "通知我")
+
+
+class NotifyUserGateway:
+    """三条真实通道的路由网关。构造注入的 callable 签名：fn(text) -> (ok, detail)。
+
+    - glasses → deliver_result 现有卡片路径（QQ 在线优先 / owner DM）
+    - qq      → qq_send（只发已配置绑定对端）
+    - phone   → 手机 notify（设备只从注册表取）
+    - auto    → deliver_result 优先，未被接受且 qq 通道在时回落 qq
+    """
+
+    def __init__(self, *, deliver=None, qq=None, phone=None) -> None:
+        self._deliver = deliver
+        self._qq = qq
+        self._phone = phone
+
+    def send(self, *, text: str, channel: str, urgency: str) -> dict:
+        channel = (channel or "auto").strip().lower()
+        if channel not in NOTIFY_CHANNELS:
+            return {"ok": False, "channel": channel,
+                    "detail": f"unknown channel {channel!r}"}
+        if channel == "glasses":
+            return self._via("glasses", self._deliver, text)
+        if channel == "qq":
+            return self._via("qq", self._qq, text)
+        if channel == "phone":
+            return self._via("phone", self._phone, text)
+        # auto：统一投递优先（其内部 QQ 在线优先/离线通知补传），未接受回落 qq
+        if self._deliver is not None:
+            ok, detail = self._deliver(text)
+            if ok or self._qq is None:
+                return {"ok": bool(ok), "channel": "auto:deliver_result",
+                        "detail": _c200(detail)}
+        if self._qq is not None:
+            ok, detail = self._qq(text)
+            return {"ok": bool(ok), "channel": "auto:qq", "detail": _c200(detail)}
+        return {"ok": False, "channel": "auto", "detail": "no channel wired"}
+
+    @staticmethod
+    def _via(name, fn, text) -> dict:
+        if fn is None:
+            return {"ok": False, "channel": name, "detail": "channel unavailable"}
+        try:
+            ok, detail = fn(text)
+        except Exception as exc:  # noqa: BLE001 — 通道故障不炸回合
+            return {"ok": False, "channel": name, "detail": type(exc).__name__}
+        return {"ok": bool(ok), "channel": name, "detail": _c200(detail)}
+
+
+class NotifyBudget:
+    """频控预算（复用 proactive_greeting 冷却+日额度模式，store 落桶计数）：
+    每会话每回合 ≤per_turn、每小时 ≤per_hour、每日 ≤per_day；0/负数=该窗不限。"""
+
+    def __init__(self, store=None, *, per_turn: int = NOTIFY_PER_TURN,
+                 per_hour: int = NOTIFY_PER_HOUR, per_day: int = NOTIFY_PER_DAY,
+                 clock=time.time) -> None:
+        self.store = store
+        self.per_turn, self.per_hour, self.per_day = per_turn, per_hour, per_day
+        self.clock = clock
+
+    def _count(self, key: str) -> int:
+        if self.store is None:
+            return 0
+        try:
+            return int(self.store.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def check(self, session_id: str, *, turn_used: int) -> str | None:
+        """返回 None=放行；否则拒绝原因（fail+说明+台账由调用方负责）。"""
+        if self.per_turn > 0 and turn_used >= self.per_turn:
+            return f"turn quota exceeded ({self.per_turn}/turn)"
+        now = datetime.fromtimestamp(self.clock(), tz=timezone.utc).astimezone(SHANGHAI_TZ)
+        if self.per_hour > 0:
+            key = f"notifyquota:hour:{session_id}:{now.strftime('%Y-%m-%d-%H')}"
+            if self._count(key) >= self.per_hour:
+                return f"hour quota exceeded ({self.per_hour}/h)"
+        if self.per_day > 0:
+            key = f"notifyquota:day:{session_id}:{now.strftime('%Y-%m-%d')}"
+            if self._count(key) >= self.per_day:
+                return f"day quota exceeded ({self.per_day}/d)"
+        return None
+
+    def record(self, session_id: str) -> None:
+        if self.store is None:
+            return
+        now = datetime.fromtimestamp(self.clock(), tz=timezone.utc).astimezone(SHANGHAI_TZ)
+        for span, bucket in (("hour", now.strftime("%Y-%m-%d-%H")),
+                             ("day", now.strftime("%Y-%m-%d"))):
+            key = f"notifyquota:{span}:{session_id}:{bucket}"
+            try:
+                self.store.put(key, self._count(key) + 1)
+            except Exception:
+                pass  # 计数失败不阻塞通知（宁多记勿漏记的方向由重启后窗口重置兜底）
+
+
+def _parse_notify(text: str) -> tuple[str, str, str] | None:
+    """``notify[channel=qq,urgency=high]:文本`` / 「提醒我…」「通知我…」。
+
+    返回 (channel, urgency, text)；不识别返回 None。未知参数键（含 target）
+    一律忽略——目标永远不可从文本注入。
+    """
+    stripped = (text or "").strip()
+    m = _NOTIFY_RE.match(stripped)
+    if m:
+        channel, urgency = "auto", "normal"
+        for pair in (m.group(1) or "").split(","):
+            key, _, value = pair.partition("=")
+            key, value = key.strip().lower(), value.strip().lower()
+            if key == "channel" and value in NOTIFY_CHANNELS:
+                channel = value
+            elif key == "urgency" and value in NOTIFY_URGENCIES:
+                urgency = value
+            # 其它键（target/to/uid…）一律忽略
+        return channel, urgency, m.group(2).strip()
+    for prefix in _NOTIFY_NL_PREFIXES:
+        if stripped.startswith(prefix):
+            return "auto", "normal", stripped[len(prefix):].strip(" ，,：:。")
+    return None
+
+
+# ---------------------------------------------------------------------------
 # 智能体本体
 # ---------------------------------------------------------------------------
 _CMD_PREFIXES = ("cmd:", "shell:", "执行:")
@@ -390,6 +527,9 @@ def _classify(text: str) -> tuple[str, object]:
             if relpath and sep:
                 return ("write", (relpath, content))
             return ("chat", stripped)
+    notify = _parse_notify(stripped)
+    if notify is not None:
+        return ("notify", notify)
     if any(k in stripped for k in _TIME_KEYS) or "what time" in lower:
         return ("tool", "what_time")
     if any(k in stripped for k in _SCHEDULE_KEYS):
@@ -423,6 +563,8 @@ class GlassesAgent:
     def __init__(self, *, store=None, chat=None, executor=None, ledger=None,
                  pending: PendingConfirms | None = None, self_modifier=None,
                  workspace=None, deliver=None,
+                 notify_gateway: NotifyUserGateway | None = None,
+                 notify_budget: NotifyBudget | None = None,
                  max_steps: int | None = None, bg_max_steps: int | None = None,
                  soft_limit_s: float | None = None,
                  bg_timeout_s: float | None = None,
@@ -441,6 +583,15 @@ class GlassesAgent:
         self.self_modifier = self_modifier
         self.workspace = str(workspace) if workspace else ""
         self.deliver = deliver
+        self.notify_gateway = notify_gateway
+        if notify_budget is not None:
+            self.notify_budget = notify_budget
+        else:
+            self.notify_budget = NotifyBudget(
+                store,
+                per_turn=_env_int(env, "WHALE_NOTIFY_PER_TURN", NOTIFY_PER_TURN),
+                per_hour=_env_int(env, "WHALE_NOTIFY_PER_HOUR", NOTIFY_PER_HOUR),
+                per_day=_env_int(env, "WHALE_NOTIFY_PER_DAY", NOTIFY_PER_DAY))
         self.max_steps = (max_steps if max_steps is not None
                           else _env_int(env, "WHALE_AGENT_MAX_STEPS", MAX_TURN_STEPS))
         self.bg_max_steps = (bg_max_steps if bg_max_steps is not None
@@ -507,6 +658,12 @@ class GlassesAgent:
             return self._interactive(
                 session_id, f"tool:{arg}", str(arg), started,
                 lambda: self._readonly_turn(str(arg), session_id, started))
+        if intent == "notify":
+            channel, urgency, note = arg  # type: ignore[misc]
+            return self._interactive(
+                session_id, "notify", f"notify:{channel}", started,
+                lambda: self._notify_turn(channel, urgency, note,
+                                          session_id, started))
         if intent == "shell":
             return self._gate_shell(str(arg), session_id, started)
         if intent == "write":
@@ -636,6 +793,62 @@ class GlassesAgent:
              "--no-pager", "-o", "cat"],
             capture_output=True, text=True, timeout=10)
         return proc.stdout or proc.stderr or ""
+
+    # -- 通知：只读可逆 → 免两阶段确认直接执行；urgency 不提权；计入步数预算 ------
+    def _notify_turn(self, channel: str, urgency: str, note: str,
+                     session_id: str, started: float) -> dict:
+        summary = f"notify_user[{channel}/{urgency}]"
+        held = self._steps_over(1, "interactive")
+        if held:
+            return self._held(session_id, "notify", summary, held, started)
+        if not note:
+            self._audit(session_id, "notify", summary, "fail", "empty text",
+                        turn_class="interactive", started=started)
+            return self._response(
+                session_id, "通知内容为空，没有发送。",
+                actions=[{"kind": "notify", "summary": summary,
+                          "status": "fail", "output_digest": "empty text"}])
+        if len(note) > NOTIFY_TEXT_MAX:
+            self._audit(session_id, "notify", summary, "fail",
+                        f"text too long (>{NOTIFY_TEXT_MAX})",
+                        turn_class="interactive", started=started)
+            return self._response(
+                session_id, f"通知太长（超过 {NOTIFY_TEXT_MAX} 字），没有发送。",
+                actions=[{"kind": "notify", "summary": summary,
+                          "status": "fail",
+                          "output_digest": f"text > {NOTIFY_TEXT_MAX} chars"}])
+        if self.notify_gateway is None:
+            self._audit(session_id, "notify", summary, "fail", "未装配",
+                        turn_class="interactive", started=started)
+            return self._response(
+                session_id, "通知通道未装配，没有发送。",
+                actions=[{"kind": "notify", "summary": summary,
+                          "status": "fail", "output_digest": "not wired"}])
+        refused = self.notify_budget.check(session_id, turn_used=0)
+        if refused:
+            self._audit(session_id, "notify", summary, "fail", refused,
+                        turn_class="interactive", started=started)
+            return self._response(
+                session_id, f"通知太频繁，这条不发（{refused}）。",
+                actions=[{"kind": "notify", "summary": summary,
+                          "status": "fail", "output_digest": _c200(refused)}])
+        receipt = self.notify_gateway.send(text=note, channel=channel,
+                                           urgency=urgency)
+        ok = bool(receipt.get("ok"))
+        if ok:
+            self.notify_budget.record(session_id)
+        # 台账：sessionId/channel/urgency/文本摘要≤200 字/回执——不记全文
+        digest = f"{receipt.get('channel')}: {receipt.get('detail')}"
+        self._audit(session_id, "notify", summary, "ok" if ok else "fail",
+                    f"{_c200(note, 80)} | {_c200(digest, 110)}",
+                    turn_class="interactive", started=started)
+        reply = ("已通知你啦。" if ok else "通知没发出去，"
+                 + str(receipt.get("detail") or "")[:60] + "。")
+        return self._response(
+            session_id, reply,
+            actions=[{"kind": "notify", "summary": summary,
+                      "status": "ok" if ok else "fail",
+                      "output_digest": _c200(digest)}])
 
     # -- 门控：shell ------------------------------------------------------------
     def _gate_shell(self, command: str, session_id: str, started: float) -> dict:
