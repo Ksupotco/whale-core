@@ -271,7 +271,6 @@ class WhaleCompanion:
                 from whale_core.life.conversation_context import ConversationKind
                 from whale_core.life.expression import derive_policy
                 from whale_core.life.relationship import RelationshipResolver
-                from whale_core.life.response_planner import derive_pragmatic_intent
                 from whale_core.life.state import InnerStateStore
 
                 rel = RelationshipResolver(
@@ -308,21 +307,17 @@ class WhaleCompanion:
                 scoped_topics = [t for t in c_state.unfinished_topics if t][:3]
                 if scope and scoped_topics:
                     state_lines.append("和这里还没聊完的：" + "；".join(scoped_topics))
-                # issue #55：语用意图软性参考（确定性推导，不加模型调用，
-                # 不指定话术）——接梗/认真回应/分享/承接/自然收尾。
-                intent = derive_pragmatic_intent(
-                    original, is_group=is_group, familiarity=rel.familiarity,
-                    open_topics=c_state.unfinished_topics, anxious=policy.anxious)
+                # issue #55 语用意图软提示已移除（owner 2026-11-18：提示词
+                # 不规定回复方式/语气，人味由角色卡自然驱动）。
                 # issue #56：近期活动背景——只列本会话真实终态任务，问到近况
                 # 可自然提起；状态照实（没成/不确定不装完成），不主动汇报。
                 from whale_core.life.activity import render_activity_hint
                 activity_hint = render_activity_hint(self.store, scope) if scope else ""
                 # 通道语气固定层已移除（owner 2026-11-11）：宿主不再用固定
                 # 「温柔/禁破折号/别客服腔」话术盖过人格卡表达；表达层提示
-                # 只保留事实驱动的部分（关系/表达策略/InnerState/活动/意图）。
+                # 只保留事实驱动的部分（关系/InnerState/活动 + 明留红线）。
                 hints = [h for h in (rel.render(), policy.render(),
-                                     "\n".join(state_lines), activity_hint,
-                                     intent.hint) if h]
+                                     "\n".join(state_lines), activity_hint) if h]
                 if hints:
                     persona_text = (
                         (persona_text or "")

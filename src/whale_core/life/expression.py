@@ -87,39 +87,22 @@ class ExpressionPolicy:
     reasons: Tuple[str, ...] = field(default_factory=tuple)
 
     def render(self) -> str:
-        """渲染为一小段自然语言提示；全部默认且无信号时返回空串。"""
+        """渲染为一小段提示；无保留项命中时返回空串。
+
+        2026-11-18 owner 决策：方式/语气/长度指导行全部移除（anxious 节奏、
+        一次一步、术语深浅、健康关怀话术、群中位节奏、「适合简短回应」）——
+        回复方式由角色卡自然驱动，提示词不规定。只保留 owner 2026-11-17 明留
+        的两条事实性红线：数据风险确认、群聊表白防误认。
+        """
         lines: list[str] = []
-        if self.anxious:
-            lines.append(
-                "对方现在比较着急：先回应当下的处境（而不是直接进完整排查流程）；"
-                "安慰要贴合具体处境，不要机械复读「别慌」「深呼吸」。")
-        if self.one_step_at_a_time:
-            lines.append(
-                "对方是新手：一次只给一个问题或一个可执行步骤，跟上再继续。")
         if self.confirm_data_safety:
             lines.append(
                 "涉及可能丢失数据的操作（如强制关机/重启）前，先确认对方是否已"
                 "保存重要文件，并说明数据丢失风险。")
-        if self.skill == "novice":
-            lines.append("对方自述是新手：少用术语，多用大白话。")
-        elif self.skill == "expert":
-            lines.append("对方有专业背景：可以给出完整技术解释，不必刻意简化。")
         if self.confession_unclaimed:
             lines.append(
                 "群聊里收到「我爱你」类话语但没有明确发给你的证据（@或引用）时，"
                 "不要认领成对自己的表白，不制造亲昵。")
-        if self.care_health:
-            # 2026-11-16 owner 实证：「先轻轻关心」会把模型推进问诊式建议模式
-            # （热水/揉一揉/早点睡），一眼模板。精简成一句：共情即可。
-            lines.append(
-                "对方说不舒服/累了：共情一句就够，别给建议清单，别叮咛。")
-        # 提供真实场合与节奏参考，表达方式仍来自角色卡。
-        if self.is_group:
-            if self.peer_median > 0:
-                lines.append(
-                    f"这群近期群友发言中位大约 {self.peer_median} 字，作为接话节奏参考。")
-        elif self.length == "short" and not self.anxious and not self.one_step_at_a_time:
-            lines.append("当前适合简短回应。")
         if not lines:
             return ""
         return "表达提示：\n" + "\n".join(lines)

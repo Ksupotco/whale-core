@@ -1950,10 +1950,12 @@ def cmd_run(args) -> int:
             if items:
                 # 带上素材库的真实标签——模型写不存在的标签=选不到图
                 tag_pool = sorted({t for m in items for t in m.tags})[:12]
+                # 2026-11-18：只留机制说明（标签池是硬约束）；「别每轮都用」
+                # 式频率规定已删——表达节奏由人格自然驱动。
                 hint += ("\n想在文字之外配一张应景的表情图时，可以在回复结尾写 "
                          "[[表情:标签]]（只能从现有素材标签里挑："
                          + "/".join(tag_pool) +
-                         "）；有匹配素材才会真的发出去，别每轮都用。")
+                         "）；有匹配素材才会真的发出去。")
         except Exception:
             pass
         return hint

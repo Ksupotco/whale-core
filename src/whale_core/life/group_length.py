@@ -45,13 +45,6 @@ class GroupLengthNorm:
     soft_ceiling: int
     from_default: bool = False
 
-    def hint(self) -> str:
-        """注入人格层的一行软提示；私聊路径不应调用。"""
-        return (
-            f"这群近期群友发言中位大约 {self.median} 字："
-            "接话贴近这个长度与语气，别写长段落或列表，也别故意碎成一两字。"
-        )
-
 
 def _visible_len(text: str) -> int:
     """统计可见长度：压空白、去掉裸 URL（链接不代表聊天口吻）。"""

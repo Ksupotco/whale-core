@@ -111,7 +111,7 @@ def test_stranger_when_no_interactions(env):
     assert state.shared_topics == ()
     assert state.address_as == ""
     assert "陌生" in state.render()
-    assert "自然处着就好" in state.render()
+    assert "自然处着" not in state.render()  # 2026-11-18：方式引导已删，只留事实
 
 
 def test_acquainted_after_few_group_interactions(env):
@@ -225,11 +225,12 @@ def test_novice_anxious_simple_short_confirm():
     assert policy.one_step_at_a_time is True
     assert policy.confirm_data_safety is True
     text = policy.render()
-    assert "一次只给一个问题或一个可执行步骤" in text
+    # owner 明留：数据风险确认行仍在
     assert "保存" in text and "风险" in text
-    assert "大白话" in text
-    # 不机械复读安慰（§6.2）
-    assert "机械复读" in text
+    # 2026-11-18：方式/语气指导行已删（一次一步/大白话/安慰节奏）
+    assert "一次只给" not in text
+    assert "大白话" not in text
+    assert "机械复读" not in text
 
 
 def test_expert_gets_deep():
@@ -237,7 +238,8 @@ def test_expert_gets_deep():
                            self_facts=("我是后端工程师",))
     assert policy.skill == "expert"
     assert policy.depth == "deep"
-    assert "完整技术解释" in policy.render()
+    # 2026-11-18：术语深浅指导行已删——专家场景不再注入任何表达提示
+    assert policy.render() == ""
 
 
 def test_calm_default_message_renders_empty():
@@ -301,9 +303,11 @@ def test_companion_injects_relationship_and_expression_hints(env):
                    conversation_id=A_PRIVATE, context=ctx, episodic=False)
     persona = model.calls[0]["persona"]
     assert "关系：" in persona
-    assert "表达提示：" in persona
-    assert "一次只给一个问题或一个可执行步骤" in persona
-    assert "大白话" in persona
+    # owner 明留红线行仍在（该消息触发数据风险确认）
+    assert "保存重要文件" in persona
+    # 2026-11-18：方式/语气指导不再注入
+    assert "一次只给" not in persona
+    assert "大白话" not in persona
     # PER-01：注入不含任何权限/scope 语义，ctx 能力集合完全不变
     assert tuple(ctx.capability_scopes) == scopes_before
     assert "tool." not in persona
@@ -545,8 +549,9 @@ def test_companion_injects_inner_state_and_pragmatic_hint(env):
     assert "你最近感兴趣：模拟电路" in persona
     assert "你最近的状态偏「curious」" in persona
     assert "和这里还没聊完的：期末复习计划" in persona
-    # #55：消息重新提起未完话题 → continue 倾向的软性提示
-    assert "没聊完的「期末复习计划」" in persona
+    # 2026-11-18：#55 语用意图软提示已移除（事实行保留，方式引导不注入）
+    assert "没聊完的「期末复习计划」" not in persona
+    assert "顺手接上" not in persona
     # PER-01：表达层注入仍不含权限语义
     assert "tool." not in persona and "scope" not in persona
 
@@ -591,7 +596,7 @@ def test_companion_injects_recent_activity_scoped_and_honest(env):
     persona = model.calls[0]["persona"]
     assert "「画一只鲸鱼」完成了" in persona
     assert "别的会话的事" not in persona  # 会话作用域隔离
-    assert "别装成完成了" in persona
+    assert "按真实状态说" in persona  # 诚实语义保留在头行（2026-11-18 起方式尾句已删）
 
 
 def test_inner_state_writeback_on_open_topic(tmp_path, monkeypatch):

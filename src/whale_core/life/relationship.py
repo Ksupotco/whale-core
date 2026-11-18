@@ -123,10 +123,8 @@ class RelationshipState:
     def render(self) -> str:
         """极简自然语言摘要（注入 persona 上下文；不改变任何权限）。"""
         if self.familiarity == "stranger":
-            return (
-                f"关系：与这位用户是陌生人（尚无互动记录）。"
-                "还不熟，自然处着就好。"
-            )
+            # 2026-11-18：只渲染事实；「还不熟，自然处着就好」式方式引导已删
+            return "关系：与这位用户是陌生人（尚无互动记录）。"
         parts = [f"关系：{self.label}（有 {self.interaction_count} 次互动记录）。"]
         if self.recent_7d:
             parts.append(f"近 7 天有 {self.recent_7d} 次互动（时间衰减已计入判断）。")

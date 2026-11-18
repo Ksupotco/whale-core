@@ -37,7 +37,7 @@ def test_norm_defaults_when_few_samples():
     norm = derive_group_length_norm([_entry("嗨"), _entry("好")])
     assert norm.from_default is True
     assert norm.median == DEFAULT_MEDIAN
-    assert "中位" in norm.hint()
+    assert norm.soft_ceiling >= norm.median
 
 
 def test_norm_uses_peer_median():
@@ -94,13 +94,11 @@ def test_plan_reply_private_ignores_soft_ceiling_by_default():
     assert "".join(plan.bubbles) == essay or len("".join(plan.bubbles)) >= 100
 
 
-def test_expression_group_uses_peer_median_hint():
+def test_expression_group_peer_median_no_longer_injected():
+    """2026-11-18：群中位节奏参考行已删——长度/节奏由人格驱动，不靠提示。"""
     policy = derive_policy("今天天气不错", is_group=True, peer_median=24)
-    rendered = policy.render()
-    assert "24" in rendered
-    assert "中位" in rendered
-    assert "像真人" not in rendered
-    assert "参考" in rendered
+    assert policy.peer_median == 24          # 事实字段仍留（元数据）
+    assert policy.render() == ""             # 但不再渲染进提示词
 
 
 def test_expression_group_without_median_adds_no_fixed_style():
@@ -111,23 +109,14 @@ def test_expression_private_unchanged_default_empty():
     assert derive_policy("你好").render() == ""
 
 
-def test_expression_group_leaves_tone_and_punctuation_to_persona():
-    policy = derive_policy("今晚吃啥", is_group=True, peer_median=18)
-    rendered = policy.render()
-    assert "18" in rendered and "参考" in rendered
-    for fixed_style in ("温柔体贴", "不互损", "客服", "破折号", "像真人"):
-        assert fixed_style not in rendered
-
-
-def test_expression_health_care_hint():
+def test_expression_health_care_hint_removed():
+    """2026-11-18：care_health 信号仍计算（元数据），关怀话术行已删。"""
     policy = derive_policy("我感冒了好难受", is_group=True)
     assert policy.care_health is True
-    assert "共情一句就够" in policy.render()  # 2026-11-16 精简：不列建议清单
-    # 私聊仍保留身体不适情境，但不强行覆盖人格语气。
+    assert "共情一句就够" not in policy.render()
     priv = derive_policy("我发烧了", is_group=False)
     assert priv.care_health is True
-    assert "共情一句就够" in priv.render()  # 2026-11-16 精简
-    assert "破折号" not in priv.render()
+    assert "共情一句就够" not in priv.render()
 
 
 def test_group_single_newline_splits_bubbles():

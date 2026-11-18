@@ -61,8 +61,8 @@ def render_activity_hint(store, conversation_id: str, *, limit: int = 3) -> str:
     lines = recent_activity_lines(store, conversation_id, limit=limit)
     if not lines:
         return ""
+    # 2026-11-18：只列事实（真实状态已在头行声明）；删去「没问到就别主动
+    # 汇报」式方式规定——提不提起由人格决定。
     return (
         "你最近在这里做过的事（真实记录，按真实状态说）：\n"
-        + "\n".join(f"- {line}" for line in lines)
-        + "\n被问到「最近在干嘛」之类的话可以自然提起；没问到就别主动汇报，"
-          "没做成/不确定的别装成完成了。")
+        + "\n".join(f"- {line}" for line in lines))
