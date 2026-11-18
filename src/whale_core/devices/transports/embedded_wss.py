@@ -22,6 +22,7 @@ from typing import Any, Sequence
 
 from whale_core.devices.observation_codec import observation, validate_request
 from whale_core.devices.output_pages import MAX_PAGE_BYTES, OutputPage, collect_pages, decode_page
+from whale_core.devices.receipt_codec import receipt_from_payload as _receipt_from_payload
 
 from whale_core.devices.transports.base import (
     ActionReceipt,
@@ -30,8 +31,6 @@ from whale_core.devices.transports.base import (
     ObserveRequest,
     ReceiptStatus,
     TransportHealth,
-    Verification,
-    VerificationStatus,
     new_id,
     now_ms,
 )
@@ -73,6 +72,15 @@ class EmbeddedWssTransport:
     async def capabilities(self, device_id: str) -> Sequence[str]:
         """hello 声明 ∩ 注册 scopes（在线视图；离线为空集，不参与选路）。"""
         return self._gateway.capabilities_of(device_id)
+
+    async def query(self, device_id: str, *, operation: str,
+                    filters: dict | None = None, max_items: int = 10,
+                    timeout_s: float = 15.0) -> dict:
+        """sensor.query 下行的 async 包装（#77：供 DeviceGatewayV2 统一查询入口
+        选路调用；GatewayError 原样上抛，由编排/REST 层映射协议错误码）。"""
+        return await asyncio.to_thread(
+            self._gateway.send_query, device_id, operation=operation,
+            filters=filters, max_items=max_items, timeout_s=timeout_s)
 
     # ---- 观察（§8） ---------------------------------------------------------
 
@@ -128,6 +136,9 @@ class EmbeddedWssTransport:
                 observation_id=action.observation_id,
                 approval_ref=action.approval_ref,
                 correlation_id=action.correlation_id,
+                authorized_scope=(list(action.authorized_scope)
+                                  if action.authorized_scope is not None
+                                  else None),
                 timeout_s=timeout_s)
         except GatewayError as exc:
             if exc.code == "expired":
@@ -138,6 +149,10 @@ class EmbeddedWssTransport:
                     summary=f"等待 action.receipt 超时（{timeout_s}s）",
                     provider_ref="core:wait-timeout",
                     completed_at=now_ms())
+            if exc.code == "invalid_message":
+                # 协议预检失败 = 调用方错误，动作从未下发（无副作用、不占键），
+                # 原样上抛由编排/REST 层映射 400——不伪装成 FAILED 终态。
+                raise
             # 离线/吊销/scope 拒绝：FAILED + 协议错误码（不悬挂 received）
             return ActionReceipt(
                 action_id=action.action_id, status=ReceiptStatus.FAILED,
@@ -208,49 +223,5 @@ class EmbeddedWssTransport:
 
 
 
-def _receipt_from_payload(action: ActionRequest, payload: dict) -> ActionReceipt:
-    """v2 action.receipt payload / 幂等命中记录 → ActionReceipt。
-
-    幂等命中（duplicate=True）时网关回的是动作记录（state + 内嵌 receipt），
-    同样映射到真实终态，绝不重放（§7.1）。
-    """
-    if payload.get("duplicate"):
-        record = payload
-        embedded = record.get("receipt") if isinstance(
-            record.get("receipt"), dict) else {}
-        state = record.get("state") or "unknown"
-        payload = {**embedded,
-                   "action_id": record.get("action_id") or action.action_id,
-                   "status": "received" if state == "pending" else state,
-                   "task_id": embedded.get("task_id") or action.task_id}
-        payload.setdefault("provider_ref", "core:estimated-outcome" if record.get("outcome_source")
-                           in ("expires_at", "retention_timeout") else "idempotent:replay-suppressed")
-    status_raw = str(payload.get("status") or "unknown")
-    try:
-        status = ReceiptStatus(status_raw)
-    except ValueError:
-        status = ReceiptStatus.UNKNOWN
-    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
-    verification = None
-    raw_ver = result.get("verification")
-    if isinstance(raw_ver, dict) and raw_ver.get("status") in (
-            "passed", "failed", "skipped"):
-        verification = Verification(
-            status=VerificationStatus(str(raw_ver["status"])),
-            summary=str(raw_ver.get("summary") or ""))
-    return ActionReceipt(
-        action_id=str(payload.get("action_id") or action.action_id),
-        status=status,
-        task_id=payload.get("task_id") or action.task_id,
-        summary=str(result.get("summary") or "")[:2000],
-        output_ref=(str(result["output_ref"]) if result.get("output_ref") else None),
-        verification=verification,
-        error_code=(str(payload["error_code"]) if payload.get("error_code") else None),
-        provider_ref=(str(payload["provider_ref"])
-                      if payload.get("provider_ref") else None),
-        started_at=(int(payload["started_at"]) if payload.get("started_at") is not None
-                    else None),
-        completed_at=((int(payload["completed_at"])
-                       if payload.get("completed_at") is not None else now_ms())
-                      if status.terminal else None),
-    )
+# `_receipt_from_payload` 已迁至 ``devices/receipt_codec.py``（模块顶部别名
+# 导入），本文件不再维护第二份映射逻辑。

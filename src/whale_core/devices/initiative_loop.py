@@ -5,8 +5,9 @@ whale-mobile #12 的 Core 运行时侧：感知事件经网关 ``adapter.offer``
 
 1. ``default_projector`` 投影为主体事实情境（设备已过配对鉴权）；
 2. ``AutonomyController`` 按规则裁决（无规则 → observe，静默）；
-3. remind/action 经既有门控执行——动作走 ``GatewayActionPort``（真实
-   设备通道，phone.notification.post）。
+3. remind/action 经既有门控执行——动作优先走 ``GatewayV2ActionPort``
+   （#77 统一选路入口），编排器未就绪时回退 ``GatewayActionPort``
+   （embedded 直发；均为真实设备通道，phone.notification.post）。
 
 **默认关**：kv ``config:device_initiative`` 未启用时不接控制器（纯落库）。
 规则同样存于该键：``{"enabled": true, "rules": {"<situation.key>":
@@ -56,10 +57,14 @@ def _owner_ctx() -> ResolvedContext:
 class DeviceInitiativeAdapter(DevicePerceptionAdapter):
     """持久化 + 主动闭环的事件适配器。"""
 
-    def __init__(self, store, *, gateway_resolver: Callable[[], Any]) -> None:
+    def __init__(self, store, *, gateway_resolver: Callable[[], Any],
+                 gateway_v2_resolver: Callable[[], Any] | None = None) -> None:
         self._inner = DurableDevicePerceptionAdapter(store)
         self._store = store
         self._gateway_resolver = gateway_resolver
+        # #77 统一入口：编排器就绪时动作走 DeviceGatewayV2（多通道选路 +
+        # 持久化幂等），否则回退旧 GatewayActionPort（embedded 直发）。
+        self._gateway_v2_resolver = gateway_v2_resolver
 
     # ---- 配置 ----
 
@@ -128,8 +133,16 @@ class DeviceInitiativeAdapter(DevicePerceptionAdapter):
         decision = controller.evaluate(situation, ctx)
         if decision.kind not in (KIND_REMIND, KIND_ACTION):
             return
-        gateway: Optional[EmbeddedWssGateway] = self._gateway_resolver()
-        port = GatewayActionPort(gateway) if gateway is not None else None
+        port = None
+        gw2 = (self._gateway_v2_resolver()
+               if self._gateway_v2_resolver is not None else None)
+        if gw2 is not None:
+            from whale_core.devices.bridge import GatewayV2ActionPort
+            port = GatewayV2ActionPort(gw2)
+        else:
+            gateway: Optional[EmbeddedWssGateway] = self._gateway_resolver()
+            if gateway is not None:
+                port = GatewayActionPort(gateway)
         controller.execute(
             decision, ctx,
             outbox=ProactiveOutbox(self._store),

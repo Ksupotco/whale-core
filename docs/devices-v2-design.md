@@ -42,13 +42,18 @@ Core EmbeddedWssGateway ── DeviceRegistry / MemoryStore
 
 - 生产设备长连接由 `EmbeddedWssGateway` 承担，V2 手机端已完成 leaf5-root 与
   nova-daily 双机联调。
-- REST query/action 当前直接调用 `EmbeddedWssGateway`，使用其基于
-  MemoryStore 的动作幂等记录与回执对账。
-- `DeviceGatewayV2` 已有能力选路、通道降级和 transport 接口；生产装配目前
-  注册 embedded WSS。ADB/SSH transport 已实现并有独立冒烟脚本，但尚未全部
-  接入生产 REST/GUI Agent 的统一选路入口。
-- `DeviceGatewayV2` 当前的 receipt cache 是进程内状态；不能把它描述为跨重启
-  持久化。持久化幂等事实仍由 EmbeddedWssGateway 的 store 记录负责。
+- REST query/action 经 `DeviceGatewayV2` 统一选路（#77，2026-11-18）：
+  GUI 类 embedded>adb>ssh、shell/文件类 ssh>embedded>adb；编排层逐动作
+  复查 registry 状态与 scope（「有 ADB/SSH 地址」≠ 已授权）。
+- `DeviceGatewayV2` 构造注入生产 MemoryStore：动作幂等记录落与
+  EmbeddedWssGateway 相同的 kv 域（`device:action:{device}:{idem}` 等），
+  跨重启可查、重复键不重放；embedded 路由由网关自身持久化，adb/ssh 路由
+  由编排层 reserve→finalize（崩溃遗留 pending 过期按 unknown 只读呈现）。
+- ADB/SSH 连接参数来自 kv `config:device_transports`（管理端
+  `GET/PUT /devices/transports` 维护，ssh 强制主机密钥 pinning），
+  不再硬编码于演示脚本；装配失败/非法项跳过不阻塞 embedded 上线。
+- GUI Agent 可经 `GatewayV2Transport` 适配器直接跑在编排器上；
+  自主体（initiative 闭环）动作端口优先 `GatewayV2ActionPort`。
 - GUI Agent 已有真实设备闭环记录（设置 → 电池状态回读）；Bilibili 完整
   自主浏览流程仍待真机验收。
 
@@ -76,7 +81,7 @@ whale-mobile 的 `docs/STATUS.md`。仓库 CI 采用手动触发，不把 PR 合
 
 ## 6. 下一步
 
-1. 将 ADB / SSH / embedded WSS 统一接入生产动作与 GUI Agent 选路入口。
-2. 将 DeviceGatewayV2 的幂等预留与回执记录持久化，并统一其状态机语义。
+1. ~~将 ADB / SSH / embedded WSS 统一接入生产动作与 GUI Agent 选路入口~~（#77 已落地）。
+2. ~~将 DeviceGatewayV2 的幂等预留与回执记录持久化，并统一其状态机语义~~（#77 已落地）。
 3. 补齐设备列表、详情、能力协商和真实拓扑视图（Core #60）。
 4. 完成 Root 手机 Bilibili 端到端任务验收（Core #58）。

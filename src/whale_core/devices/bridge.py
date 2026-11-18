@@ -217,6 +217,41 @@ class GatewayActionPort:
             raise DeviceUnavailable(exc.code, str(exc)) from exc
 
 
+class GatewayV2ActionPort:
+    """生产适配（#77 统一入口）：把 DeviceGatewayV2 包成 DeviceActionPort。
+
+    与 GatewayActionPort 的区别：动作经多 transport 选路（embedded_wss /
+    adb / ssh），scope/状态门控与持久化幂等由编排层统一承担；回执映射为
+    v2 action.receipt payload 形状，AutonomyController 的五终态裁决不变。
+    timeout/unknown 终态原样上交（控制器语义：不自动重试）。
+    """
+
+    def __init__(self, gateway_v2) -> None:
+        self._gw2 = gateway_v2
+
+    def send_action(self, device_id: str, *, capability: str,
+                    args: Mapping[str, Any], idempotency_key: str,
+                    timeout_s: float) -> Mapping[str, Any]:
+        from whale_core.devices.gateway_v2 import GatewayError as Gw2Error
+        from whale_core.devices.receipt_codec import receipt_payload
+        from whale_core.devices.sync_bridge import run_sync
+        try:
+            receipt = run_sync(self._gw2.execute(
+                device_id, capability, dict(args),
+                idempotency_key=idempotency_key,
+                timeout_ms=max(1, int(float(timeout_s) * 1000))))
+        except Gw2Error as exc:
+            raise DeviceUnavailable(exc.code, str(exc)) from exc
+        return receipt_payload(receipt)
+
+    def action_status(self, device_id: str, idempotency_key: str) -> Mapping[str, Any]:
+        """查询既有动作状态（持久记录，跨重启可读）；不重新执行。"""
+        record = self._gw2.action_record(device_id, idempotency_key)
+        if record is None:
+            raise DeviceUnavailable("not_found", "unknown action idempotency key")
+        return record
+
+
 class SimulatedDeviceBridge:
     """Core 端模拟设备面：可重放的 experience.event 入口 + 可选自主接线。"""
 
@@ -341,6 +376,7 @@ class SimulatedDeviceBridge:
 __all__ = [
     "BridgeError",
     "GatewayActionPort",
+    "GatewayV2ActionPort",
     "SimulatedActionPort",
     "SimulatedDeviceBridge",
     "SituationState",

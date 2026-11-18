@@ -101,6 +101,7 @@ class ActionRequest:
     observation_id: str | None = None
     approval_ref: str | None = None
     correlation_id: str | None = None
+    authorized_scope: Sequence[str] | None = None  # §5.3；缺省由下行侧取 [capability]
 
 
 @dataclasses.dataclass(frozen=True)

@@ -246,7 +246,7 @@ class _Handler(BaseHTTPRequestHandler):
             _studio.dispatch_studio(self, method, parts, query)
         elif head == "devices":
             from whale_core.api import devices_api as _devices
-            _devices.dispatch_devices(self, method, parts)
+            _devices.dispatch_devices(self, method, parts, query)
         elif head == "auth":
             from whale_core.api import studio as _studio
             _studio.dispatch_auth(self, method, parts)

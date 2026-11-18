@@ -5,21 +5,31 @@
 
 - ``POST   /devices/pair``           设备提交公钥 → 6 位配对码（10min）
 - ``POST   /devices/pair/approve``   主人批准配对码 → active
-- ``GET    /devices``                设备列表（含在线状态，能力为 v2 §5.1 枚举）
-- ``GET    /devices/{id}``           单设备详情
+- ``GET    /devices``                设备列表（含在线状态，能力为 v2 §5.1 枚举；
+                                     ``?transports=1`` 附带每通道健康/有效能力）
+- ``GET    /devices/{id}``           单设备详情（附带每通道健康/有效能力）
 - ``DELETE /devices/{id}``           吊销（即时生效 + 踢在线连接，§4）
 - ``POST   /devices/{id}/revoke``    同上（不便发 DELETE 的控制台）
 - ``POST   /devices/{id}/scopes``    收窄/重设注册 scope（停止自主体等价手段）
 - ``POST   /devices/{id}/query``     下发 sensor.query，deadline 内等 result
-- ``POST   /devices/{id}/action``    下发 action.request，等终态回执；
+- ``POST   /devices/{id}/action``    下发动作，等终态回执；
                                      重复幂等键回已记录状态（§7.1，绝不重放）
 - ``POST   /devices/{id}/action/status``  按幂等键查状态（只读，不重发）
 - ``POST   /devices/{id}/confirm``   设备确认挑战（§14 device.confirm.*）
 - ``GET    /devices/ws``             提示：WS 长连在独立监听端口（见 ws_url）
+- ``GET    /devices/transports``     传输配置视图 + 已注册通道（``?health=1``
+                                     附带配置内设备的逐通道健康探测）
+- ``PUT    /devices/transports``     重设 adb/ssh 传输配置（校验→落 kv→热替换）
+
+#77 统一选路：query/action 不再直调 EmbeddedWssGateway，而是经
+``ctx.device_gateway_v2``（DeviceGatewayV2）按能力选 embedded_wss/adb/ssh；
+幂等动作记录落与网关相同的 kv 域，跨重启可对账；ADB/SSH 连接参数来自 kv
+``config:device_transports``（transport_config.py 校验装配），不硬编码。
 
 WS 端点本体在 devices.embedded_wss.EmbeddedWssGateway（websockets 可选依赖，
 路径 /api/v2/devices/ws）；本模块负责懒装配与 revoke 时的即时踢线。
-懒装配同时构建 DeviceGatewayV2 编排器并注册 EmbeddedWssTransport。
+懒装配同时构建 DeviceGatewayV2 编排器并注册 EmbeddedWssTransport 及
+配置驱动的 adb/ssh transport。
 """
 
 from __future__ import annotations
@@ -60,8 +70,9 @@ def ensure_device_services(ctx, server) -> tuple[DeviceRegistry, EmbeddedWssGate
     """懒装配：registry 从 ctx.store 现场构建；gateway 需 websockets+cryptography。
 
     同时把 contracts/v2 编排面就位：``ctx.device_gateway_v2`` =
-    DeviceGatewayV2（registry 注入做 scope 检查），并注册
-    EmbeddedWssTransport（kind="embedded_wss"）。
+    DeviceGatewayV2（registry 注入做 scope 检查，store 注入做持久化幂等），
+    注册 EmbeddedWssTransport（kind="embedded_wss"），并按 kv
+    ``config:device_transports`` 装配配置驱动的 adb/ssh transport（#77）。
     """
     if not isinstance(getattr(ctx, "device_registry", None), DeviceRegistry):
         with ctx.lock:
@@ -81,7 +92,8 @@ def ensure_device_services(ctx, server) -> tuple[DeviceRegistry, EmbeddedWssGate
             from whale_core.devices.initiative_loop import DeviceInitiativeAdapter
             adapter = ctx.device_adapter = DeviceInitiativeAdapter(
                 ctx.store,
-                gateway_resolver=lambda: getattr(ctx, "device_gateway", None))
+                gateway_resolver=lambda: getattr(ctx, "device_gateway", None),
+                gateway_v2_resolver=lambda: getattr(ctx, "device_gateway_v2", None))
         host = getattr(server, "device_relay_host", "127.0.0.1")
         port = getattr(server, "device_relay_port", 0)
         # 原生通知网关（修正方案 §6）：WhaleWssProvider 首选通道。
@@ -117,17 +129,48 @@ def ensure_device_services(ctx, server) -> tuple[DeviceRegistry, EmbeddedWssGate
             notification_gateway=notification_gateway,
             log_event=ctx.log_event)
         ctx.device_gateway = gateway
-        # Device Gateway V2 编排器：注册 embedded_wss transport（V2-D4）
+        # Device Gateway V2 编排器：注册 embedded_wss transport（V2-D4）+
+        # 配置驱动的 adb/ssh transport（#77；无配置/非法项跳过不阻塞上线）
         from whale_core.devices.gateway_v2 import DeviceGatewayV2
         from whale_core.devices.transports.embedded_wss import EmbeddedWssTransport
         gw2 = getattr(ctx, "device_gateway_v2", None)
         if gw2 is None:
-            gw2 = ctx.device_gateway_v2 = DeviceGatewayV2(registry)
+            gw2 = ctx.device_gateway_v2 = DeviceGatewayV2(registry, store=ctx.store)
         gw2.register_transport(EmbeddedWssTransport(gateway))
+        _load_configured_transports(ctx, registry, gw2)
     return registry, gateway
 
 
-def dispatch_devices(handler, method: str, parts: list[str]) -> None:
+def _load_configured_transports(ctx, registry, gw2=None) -> None:
+    """启动时装配 kv 配置的 adb/ssh 通道（每进程一次；PUT 时热重载）。"""
+    if getattr(ctx, "device_transports_loaded", False):
+        return
+    ctx.device_transports_loaded = True
+    try:
+        from whale_core.devices import transport_config as tc
+        loaded = tc.load_config(ctx.store)
+        if not loaded:
+            return
+        validated = tc.validate_config(loaded, registry, strict=False)
+        gw2 = gw2 if gw2 is not None else getattr(ctx, "device_gateway_v2", None)
+        if gw2 is None:
+            return
+        if validated.get("adb") or validated.get("ssh"):
+            summary = tc.apply_transports(gw2, validated)
+            ctx.log_event("device:transports",
+                          f"boot:registered={summary['registered']}")
+        for item in validated.get("skipped") or []:
+            ctx.log_event(
+                "device:transports",
+                f"boot:skip:{item.get('kind')}:{item.get('device_id')}"[:160])
+    except Exception:  # noqa: BLE001 — 配置错误不阻塞设备面装配
+        import logging
+        logging.getLogger("whale.api.devices").warning(
+            "设备传输配置装载失败", exc_info=True)
+
+
+def dispatch_devices(handler, method: str, parts: list[str],
+                     query: dict | None = None) -> None:
     send = handler._send
     ctx = handler.ctx
     try:
@@ -149,6 +192,11 @@ def dispatch_devices(handler, method: str, parts: list[str]) -> None:
                          f"device WebSocket endpoint is served by the device "
                          f"gateway on port {gateway.port if gateway else 'n/a'} "
                          f"path {WS_PATH}"))
+        return
+
+    # -- 传输配置（#77：ADB/SSH 参数来自配置，不落私人地址硬编码） ----
+    if parts == ["devices", "transports"]:
+        _transports_endpoint(handler, ctx, registry, method, query or {})
         return
 
     # -- 配对 ----
@@ -191,10 +239,13 @@ def dispatch_devices(handler, method: str, parts: list[str]) -> None:
 
     # -- 列表 / 详情 ----
     if parts == ["devices"] and method == "GET":
+        with_transports = bool(query) and (query.get("transports") == ["1"])
         devices = []
         for meta in registry.list_devices():
             view = DeviceRegistry.public_view(meta)
             view["online"] = gateway.is_online(meta["device_id"]) if gateway else False
+            if with_transports:
+                _augment_transports(ctx, view, meta["device_id"])
             devices.append(view)
         send(200, _json_bytes({"result": {
             "devices": devices,
@@ -223,6 +274,7 @@ def dispatch_devices(handler, method: str, parts: list[str]) -> None:
                 view["session"] = (
                     {"session_id": st.session_id, "status": st.status}
                     if st is not None else None)
+            _augment_transports(ctx, view, device_id)
             send(200, _json_bytes({"result": view}))
             return
 
@@ -303,6 +355,82 @@ def dispatch_devices(handler, method: str, parts: list[str]) -> None:
             return
 
     send(404, _error("not_found", "unknown endpoint"))
+
+
+def _augment_transports(ctx, view: dict, device_id: str) -> None:
+    """列表/详情增强（#77）：每通道健康 + 有效能力（真实连接视图）。
+
+    失败静默降级（缺字段），不阻塞设备管理主路径；adb/ssh 探测可能秒级，
+    列表端点需显式 ``?transports=1`` 才附带。
+    """
+    gw2 = getattr(ctx, "device_gateway_v2", None)
+    if gw2 is None:
+        return
+    from whale_core.devices.sync_bridge import run_sync
+    try:
+        view["transports"] = run_sync(gw2.health_report(device_id))
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        view["capabilities_effective"] = run_sync(gw2.capabilities(device_id))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _transports_endpoint(handler, ctx, registry, method: str, query: dict) -> None:
+    """GET/PUT /devices/transports —— adb/ssh 通道配置的读与重设（#77）。
+
+    PUT 语义：整份替换；strict 校验（设备须 active、ssh 必须 host key pinning）；
+    通过后落 kv 并热替换进 DeviceGatewayV2（embedded_wss 不动）。
+    """
+    send = handler._send
+    from whale_core.devices import transport_config as tc
+    if method == "GET":
+        try:
+            config = tc.load_config(ctx.store)
+        except tc.TransportConfigError as exc:
+            send(500, _error("internal", f"配置读取失败: {exc}"))
+            return
+        gw2 = getattr(ctx, "device_gateway_v2", None)
+        result: dict[str, Any] = {
+            "config": config,
+            "registered": sorted(gw2.transports.keys()) if gw2 else [],
+        }
+        if query.get("health") == ["1"] and gw2 is not None:
+            from whale_core.devices.sync_bridge import run_sync
+            health: dict[str, Any] = {}
+            device_ids = sorted({
+                dev for kind in tc.CONFIG_KINDS
+                for dev in (config.get(kind) or {})})
+            for device_id in device_ids:
+                try:
+                    health[device_id] = run_sync(gw2.health_report(device_id))
+                except Exception as exc:  # noqa: BLE001
+                    health[device_id] = {"error": type(exc).__name__}
+            result["health"] = health
+        send(200, _json_bytes({"result": result}))
+        return
+    if method == "PUT":
+        body = handler._body_json()
+        if body is None or not isinstance(body, dict):
+            send(400, _error("bad_request", "JSON object body required"))
+            return
+        config = body.get("config", body)
+        try:
+            validated = tc.validate_config(config, registry, strict=True)
+        except tc.TransportConfigError as exc:
+            send(400, _error(exc.code, str(exc)))
+            return
+        clean = {kind: validated[kind] for kind in tc.CONFIG_KINDS}
+        ctx.store.put(tc.CONFIG_KEY, clean)
+        gw2 = getattr(ctx, "device_gateway_v2", None)
+        summary = tc.apply_transports(gw2, validated) if gw2 is not None else {
+            "registered": [], "configured": {}, "replaced": {}}
+        ctx.log_event("device:transports",
+                      f"put:registered={summary['registered']}")
+        send(200, _json_bytes({"result": {"ok": True, **summary}}))
+        return
+    send(405, _error("method_not_allowed", "use GET or PUT"))
 
 
 def _notify(handler, ctx, device_id: str) -> None:
@@ -478,6 +606,11 @@ def _confirm(handler, gateway: EmbeddedWssGateway | None, registry: DeviceRegist
 
 def _downlink(handler, gateway: EmbeddedWssGateway | None, device_id: str, *,
               op: str) -> None:
+    """query/action 下行（#77：经 DeviceGatewayV2 统一选路）。
+
+    编排器未就绪（极端装配顺序）时回退旧的 EmbeddedWssGateway 直发路径，
+    行为与口径完全一致（同一 kv 幂等域）。
+    """
     send = handler._send
     if gateway is None:
         send(503, _error("unavailable", "device gateway not running"))
@@ -486,6 +619,9 @@ def _downlink(handler, gateway: EmbeddedWssGateway | None, device_id: str, *,
     if body is None:
         send(400, _error("bad_request", "JSON body required"))
         return
+    from whale_core.devices.gateway_v2 import GatewayError as Gw2Error
+    from whale_core.devices.sync_bridge import run_sync
+    gw2 = getattr(handler.ctx, "device_gateway_v2", None)
     try:
         if op == "query":
             operation = str(body.get("operation") or "")
@@ -494,7 +630,11 @@ def _downlink(handler, gateway: EmbeddedWssGateway | None, device_id: str, *,
                                  f"operation 须为 v2 查询子集之一: "
                                  f"{list(query_operations())}"))
                 return
-            result = gateway.send_query(device_id, operation=operation, **query_options(body))
+            options = query_options(body)
+            if gw2 is not None:
+                result = run_sync(gw2.query(device_id, operation, **options))
+            else:
+                result = gateway.send_query(device_id, operation=operation, **options)
             handler.ctx.log_event("device:query", f"{device_id}:{operation}")
             send(200, _json_bytes({"result": {"ok": True, "result": result}}))
         else:
@@ -504,11 +644,40 @@ def _downlink(handler, gateway: EmbeddedWssGateway | None, device_id: str, *,
                                  f"capability 须为 v2 动作子集之一: "
                                  f"{list(action_capabilities())}"))
                 return
-            receipt = gateway.send_action(device_id, capability=capability, **action_options(body))
-            handler.ctx.log_event("device:action", f"{device_id}:{capability}")
-            # §7.1：重复幂等键回已记录状态（duplicate=True），200 而非 409
-            send(200, _json_bytes({"result": {"ok": True, "receipt": receipt}}))
-    except GatewayError as exc:
+            options = action_options(body)
+            if gw2 is not None:
+                from whale_core.devices.receipt_codec import receipt_payload
+                from whale_core.devices.transports.base import new_ulid
+                idem = options.get("idempotency_key") or f"agent:{new_ulid()}"
+                # §7.1：同键已有持久记录 → 回记录本体（state+receipt 形状，
+                # 与旧网关口径一致），绝不重放、不再走 execute
+                existing = gw2.action_record(device_id, idem)
+                if existing is not None:
+                    handler.ctx.log_event("device:action",
+                                          f"{device_id}:{capability}:duplicate")
+                    recorded = dict(existing)
+                    recorded["duplicate"] = True
+                    send(200, _json_bytes(
+                        {"result": {"ok": True, "receipt": recorded}}))
+                    return
+                receipt = run_sync(gw2.execute(
+                    device_id, capability, options.get("arguments") or {},
+                    idempotency_key=idem,
+                    timeout_ms=max(1, int(options.get("timeout_s", 15.0) * 1000)),
+                    task_id=options.get("task_id"),
+                    run_id=options.get("run_id"),
+                    observation_id=options.get("observation_id"),
+                    approval_ref=options.get("approval_ref"),
+                    correlation_id=options.get("correlation_id"),
+                    authorized_scope=options.get("authorized_scope")))
+                handler.ctx.log_event("device:action", f"{device_id}:{capability}")
+                send(200, _json_bytes(
+                    {"result": {"ok": True, "receipt": receipt_payload(receipt)}}))
+            else:
+                receipt = gateway.send_action(device_id, capability=capability, **options)
+                handler.ctx.log_event("device:action", f"{device_id}:{capability}")
+                send(200, _json_bytes({"result": {"ok": True, "receipt": receipt}}))
+    except (GatewayError, Gw2Error) as exc:
         send(_GATEWAY_STATUS.get(exc.code, 500), _error(exc.code, str(exc)))
     except ValueError as exc:
         # 出站帧不过 v2 schema（如 task_id/run_id 形状非法）→ 调用方错误

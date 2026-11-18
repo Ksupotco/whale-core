@@ -4,7 +4,12 @@
 - ``embedded_wss.EmbeddedWssGateway``：WSS 长连端点 /api/v2/devices/ws
   （挑战-应答验签、逐帧 schema 校验、心跳离线、experience/action/notification
   上下行、§7.2 五终态回执状态机）
-- ``gateway_v2.DeviceGatewayV2``：多 transport 编排器（embedded_wss/adb/ssh）
+- ``gateway_v2.DeviceGatewayV2``：多 transport 编排器（embedded_wss/adb/ssh；
+  注入 store 后持久化幂等跨重启，#77 起为 REST/GUI Agent/任务统一入口）
+- ``gateway_v2.GatewayV2Transport``：把编排器包成 DeviceTransport 的适配器
+  （GUI Agent 等单通道消费侧走它即得统一选路）
+- ``transport_config``：ADB/SSH 连接参数的 kv 配置装载与校验（不硬编码）
+- ``receipt_codec``：action.receipt payload/持久记录 ↔ ActionReceipt 编解码
 - ``transports.embedded_wss.EmbeddedWssTransport``：embedded 通道的
   DeviceTransport 实现（注册进 DeviceGatewayV2）
 - ``perception.DevicePerceptionAdapter``：experience.event → perception 事件流
