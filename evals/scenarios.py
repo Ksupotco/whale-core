@@ -118,7 +118,8 @@ class ProbeExpect:
     sender_id: str
     conversation_id: str
     familiarity: str = "stranger"
-    render_include: Tuple[str, ...] = ("陌生人", "自然处着就好")
+    # 2026-11-18：方式引导句已删，期望只留事实
+    render_include: Tuple[str, ...] = ("陌生人",)
     no_intimacy: bool = True
 
 
@@ -293,7 +294,8 @@ S04_NOVICE_HELP = Scenario(
             self_facts_include=("我是电脑小白",),
             policy_skill="novice",
             policy_flags=(("anxious", False), ("one_step_at_a_time", True)),
-            policy_render_include=("大白话", "一次只给一个问题或一个可执行步骤"),
+            # 2026-11-18：方式指导行已删——排除断言；技能信号仍由 flags 覆盖
+            policy_render_exclude=("大白话", "一次只给一个问题或一个可执行步骤"),
             no_intimacy=True,
         ),
         TurnExpect(
@@ -306,8 +308,9 @@ S04_NOVICE_HELP = Scenario(
             policy_skill="unknown",  # 群里读不到私聊自述 → 不脑补技能
             policy_flags=(("anxious", True), ("confirm_data_safety", True),
                           ("one_step_at_a_time", False)),  # 2026-11-17：焦虑不再触发慢滴灌
-            policy_render_include=("保存", "风险", "贴合具体处境"),
-            policy_render_exclude=("大白话",),
+            # owner 明留红线行仍在；「贴合具体处境」方式行已删
+            policy_render_include=("保存", "风险"),
+            policy_render_exclude=("大白话", "贴合具体处境"),
             no_intimacy=True,
         ),
     ),

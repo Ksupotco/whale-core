@@ -68,7 +68,7 @@ def test_s01_acquainted_stranger_probe():
     assert probe.familiarity == "stranger"
     assert probe.interaction_count == 0
     assert "陌生人" in probe.relationship_render
-    assert "自然处着就好" in probe.relationship_render
+    assert "自然处着" not in probe.relationship_render  # 2026-11-18 起只留事实
 
 
 def test_s02_familiar_member():
@@ -101,7 +101,7 @@ def test_s04_novice_help_self_facts_and_mem03():
     private_turn = result.turn("m-s04-p1")
     assert any("我是电脑小白" in f for f in private_turn.self_facts)
     assert private_turn.policy.skill == "novice"
-    assert "大白话" in private_turn.policy_render
+    assert "大白话" not in private_turn.policy_render  # 2026-11-18 起方式行已删
     group_turn = result.turn("m-s04-g1")
     # MEM-03：群聊关系视图读不到任何私人自述
     assert group_turn.self_facts == ()

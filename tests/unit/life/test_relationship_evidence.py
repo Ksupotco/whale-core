@@ -135,5 +135,7 @@ class TestPlanGuidance:
         assert p2.tone_target == "warm" and p2.length_target == "short"
 
     def test_planning_hint_anti_template(self):
-        assert "不要每轮都提问" in PLANNING_HINT
-        assert "撒娇" in PLANNING_HINT
+        # 2026-11-18：方式/语气规定句已删（owner 决策）；标记协议仍在
+        assert "◆" in PLANNING_HINT
+        assert "[[沉默]]" in PLANNING_HINT
+        assert "不要每轮都提问" not in PLANNING_HINT
