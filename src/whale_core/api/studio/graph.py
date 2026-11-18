@@ -87,9 +87,11 @@ def _graph(handler, ctx, svc: StudioServices) -> None:
                           "label": card.title or card.name, "builtin": False})
 
     # issue #11：设备节点——事实源 = DeviceRegistry（非客户端自报）；
-    # 只展示 标签/状态/能力/排队水位，绝不回显 token/公钥/配对码。
+    # 只展示 标签/角色/状态/在线/能力/排队水位，绝不回显 token/公钥/配对码。
+    # #60：在线状态取自已装配网关（未装配时 online=None=未知，不假装离线）。
     from whale_core.devices.registry import DeviceRegistry
     _registry = DeviceRegistry(ctx.store)
+    _gateway = getattr(ctx, "device_gateway", None)
     for meta in _registry.list_devices():
         did = str(meta.get("device_id") or "")
         if not did:
@@ -101,14 +103,31 @@ def _graph(handler, ctx, svc: StudioServices) -> None:
             evid = k.rsplit(":", 1)[-1]
             if not ctx.store.get(f"device:processed:{did}:{evid}"):
                 queued += 1
-        nodes.append({
+        node = {
             "id": f"device:{did}", "kind": "device",
             "label": str(meta.get("label") or did),
             "status": str(meta.get("status") or "unknown"),
             "capabilities": list(meta.get("scopes") or []),
             "queued_events": queued,
             "created_at": meta.get("created_at"),
-        })
+        }
+        if meta.get("role"):
+            node["role"] = str(meta["role"])
+        if _gateway is not None:
+            node["online"] = bool(_gateway.is_online(did))
+        if meta.get("status") == "paused":
+            explanations[f"device:{did}"] = {
+                "code": "device_paused",
+                "message": "设备已暂停：注册与连接保留，全部动作/查询被门控拒绝；"
+                           "恢复请用 resume（吊销才需重新配对）。",
+            }
+        elif meta.get("status") == "revoked":
+            explanations[f"device:{did}"] = {
+                "code": "device_revoked",
+                "message": "设备已吊销：即时生效，在线连接已踢；"
+                           "恢复须重新走配对码审批仪式。",
+            }
+        nodes.append(node)
 
     for ref in svc.spaces.list_spaces(include_protected=True):
         view = _space_view(ctx, svc, ref.space_id)

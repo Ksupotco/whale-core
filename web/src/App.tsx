@@ -6,6 +6,7 @@ import Chat, { type Msg } from "./components/Chat";
 import Icon from "./components/Icon";
 import FirstRunSetup from "./components/FirstRunSetup";
 const Plugins = deferredPage(() => import("./components/Plugins"));
+const DevicesPage = deferredPage(() => import("./components/Devices"));
 const MemoryView = deferredPage(() => import("./components/Memory"));
 const Approvals = deferredPage(() => import("./components/Approvals"));
 const Tasks = deferredPage(() => import("./components/Tasks"));
@@ -352,7 +353,7 @@ export default function App() {
             <span className="workspace-tag">CORE CONSOLE</span>
           </div>
           {tab === "overview" && <Overview onNavigate={setTab} />}
-          {tab === "devices" && <RuntimeDiagnostics />}
+          {tab === "devices" && <><DevicesPage /><RuntimeDiagnostics /></>}
           {tab === "studio" && <Studio onNavigate={(t) => setTab(t as TabKey)} />}
           {tab === "plugins" && <Plugins />}
           {tab === "memory" && <MemoryView />}

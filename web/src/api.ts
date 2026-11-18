@@ -15,9 +15,46 @@ export interface RetentionReport {
   receipt_scanned?: number; deleted?: number; marked_unknown?: number; more?: boolean;
   scan_mode?: string; error?: string;
 }
+export interface DeviceListItem {
+  device_id: string; label?: string; status: string; online?: boolean;
+  scopes?: string[]; role?: string;
+}
 export interface DeviceReport {
-  devices: { device_id: string; label?: string; status: string; online?: boolean; scopes?: string[] }[];
+  devices: DeviceListItem[];
   retention?: RetentionReport;
+  capabilities?: string[];
+  ws_path?: string;
+  ws_port?: number | null;
+}
+
+/** #60：设备最近回执（state 含 unknown + outcome_source，诚实呈现）。 */
+export interface DeviceReceipt {
+  idempotency_key: string;
+  action_id: string;
+  capability: string;
+  state: string;
+  route: string;
+  created_at?: number | null;
+  updated_at?: number | null;
+  outcome_source?: string;
+  task_id?: string;
+  run_id?: string;
+  summary?: string;
+  error_code?: string;
+}
+
+export interface DeviceActivity {
+  uplink: { events: number; last_at: number | null };
+  downlink: { pending: number; last_receipt: DeviceReceipt | null };
+}
+
+export interface DeviceDetail extends DeviceListItem {
+  pubkey_hex?: string;
+  created_at?: number;
+  updated_at?: number;
+  transports?: Record<string, string>;
+  capabilities_effective?: string[];
+  activity?: DeviceActivity;
 }
 export interface MemoryWorkerReport {
   state: string; error?: string; claimed?: number; completed?: number; failed?: number;
@@ -434,6 +471,34 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   devices: (signal?: AbortSignal) => request<DeviceReport>("/devices", { signal }),
+  // ---- #60 设备管理 ----
+  devicesDetail: (deviceId: string, signal?: AbortSignal) =>
+    request<DeviceDetail>(`/devices/${encodeURIComponent(deviceId)}`, { signal }),
+  deviceReceipts: (deviceId: string, limit = 20, signal?: AbortSignal) =>
+    request<{ device_id: string; receipts: DeviceReceipt[] }>(
+      `/devices/${encodeURIComponent(deviceId)}/receipts?limit=${limit}`, { signal }),
+  deviceRename: (deviceId: string, label: string) =>
+    request<DeviceDetail>(`/devices/${encodeURIComponent(deviceId)}/rename`, {
+      method: "POST", body: JSON.stringify({ label }),
+    }),
+  deviceRole: (deviceId: string, role: string) =>
+    request<DeviceDetail>(`/devices/${encodeURIComponent(deviceId)}/role`, {
+      method: "POST", body: JSON.stringify({ role }),
+    }),
+  deviceScopes: (deviceId: string, scopes: string[]) =>
+    request<{ device_id: string; status: string; scopes: string[] }>(
+      `/devices/${encodeURIComponent(deviceId)}/scopes`, {
+        method: "POST", body: JSON.stringify({ scopes }),
+      }),
+  devicePause: (deviceId: string) =>
+    request<{ device_id: string; status: string }>(
+      `/devices/${encodeURIComponent(deviceId)}/pause`, { method: "POST" }),
+  deviceResume: (deviceId: string) =>
+    request<{ device_id: string; status: string }>(
+      `/devices/${encodeURIComponent(deviceId)}/resume`, { method: "POST" }),
+  deviceRevoke: (deviceId: string) =>
+    request<{ device_id: string; status: string; kicked: boolean }>(
+      `/devices/${encodeURIComponent(deviceId)}/revoke`, { method: "POST" }),
   conversation: (id = "console") =>
     request<{
       conversation_id: string;

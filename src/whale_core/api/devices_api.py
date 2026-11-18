@@ -275,6 +275,7 @@ def dispatch_devices(handler, method: str, parts: list[str],
                     {"session_id": st.session_id, "status": st.status}
                     if st is not None else None)
             _augment_transports(ctx, view, device_id)
+            view["activity"] = _device_activity(ctx, device_id)
             send(200, _json_bytes({"result": view}))
             return
 
@@ -312,6 +313,74 @@ def dispatch_devices(handler, method: str, parts: list[str],
                 "device_id": device_id,
                 "status": meta.get("status"),
                 "scopes": list(meta.get("scopes") or []),
+            }}))
+            return
+
+        if len(parts) == 3 and parts[2] == "rename" and method == "POST":
+            body = handler._body_json()
+            if body is None:
+                send(400, _error("bad_request", "JSON body required"))
+                return
+            try:
+                meta = registry.rename(device_id, str(body.get("label") or ""))
+            except DeviceRegistryError as exc:
+                send(_REGISTRY_STATUS.get(exc.code, 400), _error(exc.code, str(exc)))
+                return
+            ctx.log_event("device:rename", device_id)
+            send(200, _json_bytes({"result": DeviceRegistry.public_view(meta)}))
+            return
+
+        if len(parts) == 3 and parts[2] == "role" and method == "POST":
+            body = handler._body_json()
+            if body is None:
+                send(400, _error("bad_request", "JSON body required"))
+                return
+            try:
+                meta = registry.set_role(device_id, str(body.get("role") or ""))
+            except DeviceRegistryError as exc:
+                send(_REGISTRY_STATUS.get(exc.code, 400), _error(exc.code, str(exc)))
+                return
+            ctx.log_event("device:role", device_id)
+            send(200, _json_bytes({"result": DeviceRegistry.public_view(meta)}))
+            return
+
+        if len(parts) == 3 and parts[2] == "pause" and method == "POST":
+            # 暂停：注册保留、连接可在线，动作/查询全被拒（fail-closed）
+            try:
+                meta = registry.pause(device_id)
+            except DeviceRegistryError as exc:
+                send(_REGISTRY_STATUS.get(exc.code, 400), _error(exc.code, str(exc)))
+                return
+            ctx.log_event("device:pause", device_id)
+            send(200, _json_bytes({"result": {
+                "device_id": device_id, "status": meta["status"]}}))
+            return
+
+        if len(parts) == 3 and parts[2] == "resume" and method == "POST":
+            try:
+                meta = registry.resume(device_id)
+            except DeviceRegistryError as exc:
+                send(_REGISTRY_STATUS.get(exc.code, 400), _error(exc.code, str(exc)))
+                return
+            ctx.log_event("device:resume", device_id)
+            send(200, _json_bytes({"result": {
+                "device_id": device_id, "status": meta["status"]}}))
+            return
+
+        if len(parts) == 3 and parts[2] == "receipts" and method == "GET":
+            limit = 20
+            if query and query.get("limit"):
+                try:
+                    limit = int(query["limit"][0])
+                except (ValueError, TypeError, IndexError):
+                    send(400, _error("bad_request", "limit 须为整数"))
+                    return
+                if not 1 <= limit <= 50:
+                    send(400, _error("bad_request", "limit 须在 1..50"))
+                    return
+            send(200, _json_bytes({"result": {
+                "device_id": device_id,
+                "receipts": _list_receipts(ctx, registry, device_id, limit),
             }}))
             return
 
@@ -355,6 +424,118 @@ def dispatch_devices(handler, method: str, parts: list[str],
             return
 
     send(404, _error("not_found", "unknown endpoint"))
+
+
+def _scan_all(store, prefix: str, *, cap: int = 5000) -> list[str]:
+    """分页扫完一个键前缀（scan_keys 不可用时退化 keys()）；cap 防爆。"""
+    scan = getattr(store, "scan_keys", None)
+    if not callable(scan):
+        return [k for k in store.keys() if k.startswith(prefix)][:cap]
+    out: list[str] = []
+    cursor = ""
+    while len(out) < cap:
+        batch = scan(prefix, after=cursor, limit=500)
+        if not batch:
+            break
+        out.extend(batch)
+        cursor = batch[-1]
+        if len(batch) < 500:
+            break
+    return out[:cap]
+
+
+def _receipt_view(device_id: str, key: str, record: dict, now: int) -> dict:
+    """动作记录 → 管理端回执视图（unknown 口径与网关一致：过期非终态按
+    unknown 呈现并带 outcome_source；终态 first-wins 不重述）。"""
+    state = str(record.get("state") or "unknown")
+    outcome_source = record.get("outcome_source")
+    if state not in TERMINAL_RECORD_STATES and now > int(record.get("expires_at") or 0):
+        state = "unknown"
+        outcome_source = outcome_source or "expires_at"
+    receipt = record.get("receipt") if isinstance(record.get("receipt"), dict) else {}
+    result = receipt.get("result") if isinstance(receipt.get("result"), dict) else {}
+    view: dict[str, Any] = {
+        "idempotency_key": str(record.get("idempotency_key")
+                               or key.rsplit(":", 1)[-1]),
+        "action_id": str(record.get("action_id") or ""),
+        "capability": str(record.get("capability") or ""),
+        "state": state,
+        "route": str(record.get("route") or "embedded_wss"),
+        "created_at": record.get("created_at"),
+        "updated_at": record.get("updated_at", record.get("created_at")),
+    }
+    if outcome_source:
+        view["outcome_source"] = outcome_source
+    if record.get("task_id"):
+        view["task_id"] = record["task_id"]
+    if record.get("run_id"):
+        view["run_id"] = record["run_id"]
+    summary = result.get("summary") or receipt.get("summary") or ""
+    if summary:
+        view["summary"] = str(summary)[:200]
+    error_code = receipt.get("error_code")
+    if error_code:
+        view["error_code"] = str(error_code)
+    return view
+
+
+#: kv 动作记录终态（单一事实源在 devices.action_records）
+from whale_core.devices.action_records import (
+    TERMINAL_STATES as TERMINAL_RECORD_STATES,
+)
+
+
+def _list_receipts(ctx, registry, device_id: str, limit: int) -> list[dict]:
+    """设备最近回执（新→旧）；设备未知时由调用方 404 前置。"""
+    from whale_core.devices.transports.base import now_ms
+    now = now_ms()
+    prefix = f"device:action:{device_id}:"
+    views = []
+    for key in _scan_all(ctx.store, prefix):
+        record = ctx.store.get(key)
+        if isinstance(record, dict):
+            views.append(_receipt_view(device_id, key, record, now))
+    views.sort(key=lambda v: (v.get("updated_at") or 0), reverse=True)
+    return views[:limit]
+
+
+def _device_activity(ctx, device_id: str) -> dict:
+    """设备上/下行真实活动聚合（#60 拓扑数据源；全部来自 kv 与在线状态）。
+
+    - uplink：experience.event 落库计数与最近一次时间（感知上行）；
+    - downlink：动作记录在飞数（pending 未过期）与最近一次终态（动作下行）。
+    """
+    from whale_core.devices.transports.base import now_ms
+    now = now_ms()
+    uplink_count = 0
+    uplink_last = None
+    for key in _scan_all(ctx.store, f"device:event:{device_id}:"):
+        record = ctx.store.get(key)
+        if isinstance(record, dict):
+            uplink_count += 1
+            received = record.get("received_at")
+            if isinstance(received, (int, float)) and (
+                    uplink_last is None or received > uplink_last):
+                uplink_last = int(received)
+    pending = 0
+    last: dict | None = None
+    for key in _scan_all(ctx.store, f"device:action:{device_id}:"):
+        record = ctx.store.get(key)
+        if not isinstance(record, dict):
+            continue
+        state = str(record.get("state") or "unknown")
+        if state not in TERMINAL_RECORD_STATES:
+            if now <= int(record.get("expires_at") or 0):
+                pending += 1
+        updated = int(record.get("updated_at") or record.get("created_at") or 0)
+        if last is None or updated > int(last.get("updated_at") or 0):
+            view = _receipt_view(device_id, key, record, now)
+            view["updated_at"] = updated
+            last = view
+    return {
+        "uplink": {"events": uplink_count, "last_at": uplink_last},
+        "downlink": {"pending": pending, "last_receipt": last},
+    }
 
 
 def _augment_transports(ctx, view: dict, device_id: str) -> None:

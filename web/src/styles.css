@@ -2935,3 +2935,45 @@ code,
 @media (max-width: 900px) { .runtime-diagnostics .cards { grid-template-columns: minmax(0, 1fr); } }
 /* Keep lazy loading and recovery inside the current page, below navigation. */
 .deferred-page { padding: 24px; border: 1px solid var(--border, #dce4dc); border-radius: 16px; }
+
+/* ===== #60 设备管理页 ===== */
+.devices-page { margin-bottom: 20px; }
+.device-topology { width: 100%; max-width: 760px; display: block; margin: 8px 0 16px; }
+.topo-core { fill: var(--accent, #4f7cff); opacity: 0.9; }
+.topo-core-label { fill: #fff; font-size: 13px; font-weight: 600; }
+.topo-edge { fill: none; stroke-width: 1.6; }
+.topo-up { stroke: #34a853; }
+.topo-down { stroke: #a142f4; }
+.topo-edge.dead { stroke-dasharray: 4 4; opacity: 0.4; }
+.topo-arrow-up { fill: #34a853; }
+.topo-arrow-down { fill: #a142f4; }
+.topo-edge-label { font-size: 11px; fill: var(--muted, #8a8f98); }
+.topo-device { fill: var(--card, #1c1f26); stroke: #3a4150; }
+.topo-device.selected { stroke: var(--accent, #4f7cff); stroke-width: 2; }
+.topo-device.dead { opacity: 0.55; }
+.topo-device-label { fill: var(--fg, #e6e9ef); font-size: 12px; font-weight: 600; }
+.topo-device-sub { fill: var(--muted, #8a8f9f); font-size: 10px; }
+.device-list { list-style: none; padding: 0; margin: 0 0 12px; }
+.device-row { display: flex; gap: 12px; align-items: center; width: 100%; text-align: left; padding: 10px 12px; border: 1px solid #2c313c; border-radius: 10px; background: transparent; cursor: pointer; margin-bottom: 6px; color: inherit; }
+.device-row:hover { border-color: var(--accent, #4f7cff); }
+.device-row.selected { border-color: var(--accent, #4f7cff); background: rgba(79, 124, 255, 0.08); }
+.device-role { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: rgba(52, 168, 83, 0.15); color: #34a853; }
+.device-state { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: #333a47; }
+.device-state-succeeded, .device-state-active { background: rgba(52, 168, 83, 0.18); color: #34a853; }
+.device-state-failed, .device-state-revoked { background: rgba(234, 67, 53, 0.16); color: #ea4335; }
+.device-state-timeout, .device-state-paused { background: rgba(251, 188, 5, 0.16); color: #fbbc05; }
+.device-state-unknown { background: rgba(154, 81, 224, 0.18); color: #a142f4; }
+.device-state-pending, .device-state-received { background: rgba(79, 124, 255, 0.16); color: #4f7cff; }
+.device-detail { border-top: 1px solid #2c313c; padding-top: 12px; }
+.device-meta { display: grid; grid-template-columns: 88px 1fr; gap: 4px 12px; font-size: 13px; }
+.device-meta dt { color: var(--muted, #8a8f9f); }
+.device-edit { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; margin: 10px 0; }
+.device-edit label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted, #8a8f9f); }
+.device-edit input { padding: 6px 8px; border-radius: 8px; border: 1px solid #2c313c; background: transparent; color: inherit; }
+.device-scopes { margin: 10px 0; }
+.device-scopes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 10px; margin: 8px 0; font-size: 12px; }
+.device-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0 14px; }
+.device-receipts { width: 100%; border-collapse: collapse; font-size: 12px; }
+.device-receipts th, .device-receipts td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #262b35; }
+.device-receipts th { color: var(--muted, #8a8f9f); font-weight: 500; }
+.device-receipt-summary { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

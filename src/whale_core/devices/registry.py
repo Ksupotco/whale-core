@@ -327,3 +327,70 @@ class DeviceRegistry:
     @staticmethod
     def dumps_scopes(meta: dict[str, Any]) -> str:
         return json.dumps(meta.get("scopes") or [], ensure_ascii=False)
+
+    # ---- 管理操作（#60：重命名 / 角色 / 暂停 / 恢复） ----
+
+    @_atomic_change
+    def rename(self, device_id: str, label: str) -> dict[str, Any]:
+        """重命名设备（任意状态允许；仅展示元数据，不动授权）。"""
+        meta = self.get(device_id)
+        if meta is None:
+            raise DeviceRegistryError("not_found", f"未知设备 {device_id}")
+        if not isinstance(label, str) or not (1 <= len(label.strip()) <= 64):
+            raise DeviceRegistryError("bad_request", "label 须为 1..64 字符")
+        meta["label"] = label.strip()
+        meta["updated_at"] = now_ms()
+        self.store.put(self._key(device_id), meta)
+        self.audit("device.rename", device_id=device_id, label=meta["label"])
+        return dict(meta)
+
+    @_atomic_change
+    def set_role(self, device_id: str, role: str) -> dict[str, Any]:
+        """设置/清除设备角色标签（展示/筛选元数据，不参与鉴权）。"""
+        meta = self.get(device_id)
+        if meta is None:
+            raise DeviceRegistryError("not_found", f"未知设备 {device_id}")
+        role = (role or "").strip()
+        if len(role) > 32 or re.search(r"[\x00-\x1f\x7f]", role):
+            raise DeviceRegistryError(
+                "bad_request", "role 须为 ≤32 字符且不含控制字符")
+        if role:
+            meta["role"] = role
+        else:
+            meta.pop("role", None)
+        meta["updated_at"] = now_ms()
+        self.store.put(self._key(device_id), meta)
+        self.audit("device.role", device_id=device_id, role=role or "(cleared)")
+        return dict(meta)
+
+    @_atomic_change
+    def pause(self, device_id: str) -> dict[str, Any]:
+        """暂停设备：保留注册与在线连接，全部动作/查询被门控拒绝（fail-closed：
+        网关 _check_scope 与编排器 _authorize 均要求 status=active）。
+        与 revoked 的区别：可 resume 恢复，不需要重新配对。"""
+        meta = self.get(device_id)
+        if meta is None:
+            raise DeviceRegistryError("not_found", f"未知设备 {device_id}")
+        if meta.get("status") != "active":
+            raise DeviceRegistryError(
+                "conflict", f"设备状态 {meta.get('status')}，仅 active 可暂停")
+        meta["status"] = "paused"
+        meta["updated_at"] = now_ms()
+        self.store.put(self._key(device_id), meta)
+        self.audit("device.pause", device_id=device_id)
+        return dict(meta)
+
+    @_atomic_change
+    def resume(self, device_id: str) -> dict[str, Any]:
+        """恢复已暂停设备回 active（revoked 不可恢复，须重新配对）。"""
+        meta = self.get(device_id)
+        if meta is None:
+            raise DeviceRegistryError("not_found", f"未知设备 {device_id}")
+        if meta.get("status") != "paused":
+            raise DeviceRegistryError(
+                "conflict", f"设备状态 {meta.get('status')}，仅 paused 可恢复")
+        meta["status"] = "active"
+        meta["updated_at"] = now_ms()
+        self.store.put(self._key(device_id), meta)
+        self.audit("device.resume", device_id=device_id)
+        return dict(meta)
