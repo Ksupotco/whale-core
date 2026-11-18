@@ -20,6 +20,12 @@
 - ``GET    /devices/transports``     传输配置视图 + 已注册通道（``?health=1``
                                      附带配置内设备的逐通道健康探测）
 - ``PUT    /devices/transports``     重设 adb/ssh 传输配置（校验→落 kv→热替换）
+- ``POST   /devices/{id}/gui_tasks`` 启动 GUI 自主任务（goal 文本；经
+                                     DeviceGatewayV2 统一选路，任务记录进
+                                     既有任务面；#58）
+- ``GET    /devices/{id}/gui_tasks`` 设备 GUI 任务列表（新→旧）
+- ``POST   /devices/{id}/gui_tasks/{task_id}/stop``  停止任务（协程取消 +
+                                     best-effort device.stop 急停）
 
 #77 统一选路：query/action 不再直调 EmbeddedWssGateway，而是经
 ``ctx.device_gateway_v2``（DeviceGatewayV2）按能力选 embedded_wss/adb/ssh；
@@ -47,6 +53,7 @@ from whale_core.devices.embedded_wss import (
     EmbeddedWssGateway,
     GatewayError,
 )
+from whale_core.devices.gui_agent.service import GuiTaskError
 from whale_core.devices.registry import (
     DEVICE_CAPABILITIES,
     DeviceRegistry,
@@ -61,8 +68,8 @@ _REGISTRY_STATUS = {
 }
 #: GatewayError.code（contracts/v2 §15 + not_found 管理面补充）→ HTTP 状态
 _GATEWAY_STATUS = {
-    "invalid_message": 400, "scope_denied": 403, "not_found": 404,
-    "unavailable": 409, "expired": 504,
+    "invalid_message": 400, "scope_denied": 403, "device_revoked": 403,
+    "not_found": 404, "unavailable": 409, "expired": 504,
 }
 
 
@@ -138,6 +145,10 @@ def ensure_device_services(ctx, server) -> tuple[DeviceRegistry, EmbeddedWssGate
             gw2 = ctx.device_gateway_v2 = DeviceGatewayV2(registry, store=ctx.store)
         gw2.register_transport(EmbeddedWssTransport(gateway))
         _load_configured_transports(ctx, registry, gw2)
+        # #58：GUI 任务生产入口（任务记录复用 tasks:recent/task: 面）
+        if getattr(ctx, "gui_task_service", None) is None:
+            from whale_core.devices.gui_agent.service import GuiTaskService
+            ctx.gui_task_service = GuiTaskService(ctx.store, gw2)
     return registry, gateway
 
 
@@ -365,6 +376,66 @@ def dispatch_devices(handler, method: str, parts: list[str],
             ctx.log_event("device:resume", device_id)
             send(200, _json_bytes({"result": {
                 "device_id": device_id, "status": meta["status"]}}))
+            return
+
+        if len(parts) == 3 and parts[2] == "gui_tasks" and method == "POST":
+            body = handler._body_json()
+            if body is None:
+                send(400, _error("bad_request", "JSON body required"))
+                return
+            svc = getattr(ctx, "gui_task_service", None)
+            if svc is None:
+                send(503, _error("unavailable", "gui task service not assembled"))
+                return
+            try:
+                record = svc.start(
+                    device_id, str(body.get("goal") or ""),
+                    max_steps=int(body.get("max_steps") or 50),
+                    task_timeout_s=int(body.get("task_timeout_s") or 600))
+            except GuiTaskError as exc:
+                send(_GATEWAY_STATUS.get(exc.code, 400)
+                     if exc.code != "bad_request" else 400,
+                     _error(exc.code, str(exc)))
+                return
+            ctx.log_event("device:gui_task", f"{device_id}:{record['task_id']}")
+            send(202, _json_bytes({"result": record}))
+            return
+
+        if len(parts) == 3 and parts[2] == "gui_tasks" and method == "GET":
+            svc = getattr(ctx, "gui_task_service", None)
+            if svc is None:
+                send(503, _error("unavailable", "gui task service not assembled"))
+                return
+            send(200, _json_bytes({"result": {
+                "device_id": device_id,
+                "tasks": svc.list_for_device(device_id)}}))
+            return
+
+        if len(parts) == 4 and parts[2] == "gui_tasks" and method == "GET":
+            svc = getattr(ctx, "gui_task_service", None)
+            record = svc.get(parts[3]) if svc is not None else None
+            if record is None or record.get("device_id") != device_id:
+                send(404, _error("not_found", f"未知任务 {parts[3]}"))
+                return
+            send(200, _json_bytes({"result": record}))
+            return
+
+        if len(parts) == 5 and parts[2] == "gui_tasks" and parts[4] == "stop" \
+                and method == "POST":
+            svc = getattr(ctx, "gui_task_service", None)
+            if svc is None:
+                send(503, _error("unavailable", "gui task service not assembled"))
+                return
+            try:
+                record = svc.stop(parts[3])
+            except GuiTaskError as exc:
+                send(_REGISTRY_STATUS.get(exc.code, 400), _error(exc.code, str(exc)))
+                return
+            if record.get("device_id") != device_id:
+                send(404, _error("not_found", f"未知任务 {parts[3]}"))
+                return
+            ctx.log_event("device:gui_task_stop", f"{device_id}:{parts[3]}")
+            send(200, _json_bytes({"result": record}))
             return
 
         if len(parts) == 3 and parts[2] == "receipts" and method == "GET":
