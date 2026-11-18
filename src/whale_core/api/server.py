@@ -4,7 +4,9 @@
 - 纯 stdlib（ThreadingHTTPServer），沿用 wq_push/qq_onebot 的回环监听先例；
   **默认只绑 127.0.0.1**，云端部署须显式配监听地址 + TLS 反代（宿主职责）。
 - 所有 /api/ 请求强制 ``Authorization: Bearer <token>``（hmac.compare_digest
-  常量时间比较）；token 由宿主注入，本模块不生成、不回显、不进日志。
+  常量时间比较），或同源控制台会话 cookie（api/console_session.py：
+  管理 token 一次性交换短时效 HttpOnly cookie，写操作强制 CSRF 头）；
+  token 由宿主注入，本模块不生成、不回显、不进日志。
 - 统一错误格式 ``{"error": {"code", "message"}}``；成功 ``{"result": ...}``。
 - 配置类输出一律过 PluginManager.config_view 脱敏；本层不回显任何 secret。
 - 前端只读本 API，不直接碰 SQLite/文件系统/密钥（roadmap §5.1）。
@@ -183,17 +185,26 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             self._send(404, _error("not_found", "unknown endpoint"))
             return
-        if not self._authorized():
-            self._send(401, _error("unauthorized", "missing or invalid bearer token"))
+        rel = path[len(api_prefix):]
+        parts = [p for p in rel.split("/") if p]
+        # 控制台会话端点自鉴权（POST 签发=管理 token 比对换 cookie；
+        # GET 探测/DELETE 注销=cookie；见 api/console_session.py 设计依据）
+        if api_prefix == "/api/v1/" and parts == ["console", "session"]:
+            from whale_core.api import console_session
+            console_session.handle_console_session(self, method)
             return
+        if not self._authorized():
+            # Bearer 之外接受同源控制台会话 cookie（写操作强制 CSRF 头）
+            from whale_core.api import console_session
+            if not console_session.cookie_authorized(self):
+                self._send(401, _error("unauthorized", "missing or invalid bearer token"))
+                return
         origin = self.headers.get('Origin')
         if origin:
             origin_parts = urlparse(origin)
             if origin_parts.scheme not in ('http', 'https') or origin_parts.netloc != self.headers.get('Host'):
                 self._send(403, _error('forbidden', 'cross-origin request denied'))
                 return
-        rel = path[len(api_prefix):]
-        parts = [p for p in rel.split("/") if p]
         query = parse_qs(parsed.query)
         try:
             if api_prefix == "/api/v2/":
@@ -387,6 +398,9 @@ class WhaleApiServer:
         self._httpd = _BoundedServer((host, port), _Handler)
         self._httpd.ctx = ctx       # type: ignore[attr-defined]
         self._httpd.token = token   # type: ignore[attr-defined]
+        # 控制台同源会话存储（内存；进程重启即失效——fail-closed 方向）
+        from whale_core.api.console_session import ConsoleSessionStore
+        self._httpd.console_sessions = ConsoleSessionStore()  # type: ignore[attr-defined]
         # PCM 语音中继（可选 websockets 依赖）懒监听在 API 端口 + 1（沿用 PR#4
         # 约定：8080 → 8081）；port=0（临时端口）时中继也用临时端口。
         self._httpd.voice_relay_host = host                    # type: ignore[attr-defined]
