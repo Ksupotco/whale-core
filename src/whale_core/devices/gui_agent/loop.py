@@ -87,6 +87,7 @@ class GuiAgentLoop:
         action_timeout_ms: int = DEFAULT_ACTION_TIMEOUT_MS,
         observe_timeout_ms: int = DEFAULT_OBSERVE_TIMEOUT_MS,
         observe_request: ObserveRequest | None = None,
+        watchdog_grace_ms: int = 15_000,
     ) -> None:
         self.transport = transport
         self.max_steps = max(1, int(max_steps))
@@ -95,6 +96,8 @@ class GuiAgentLoop:
         self.action_timeout_ms = int(action_timeout_ms)
         self.observe_timeout_ms = int(observe_timeout_ms)
         self._observe_request = observe_request or ObserveRequest()
+        # transport 悬挂看门狗的宽限（叠加在动作自身 timeout_ms 之上）
+        self._watchdog_grace_ms = int(watchdog_grace_ms)
 
     async def run(
         self,
@@ -313,7 +316,19 @@ class GuiAgentLoop:
 
     async def _execute(self, device_id: str, req: ActionRequest) -> ActionReceipt:
         try:
-            return await self.transport.execute(device_id, req)
+            # 看门狗（#58 真机实证：transport 悬挂会把任务挂死）——transport 自律
+            # 超时之外再加一道保险，宽限 15s 给通道内重试/清理。超时即 TIMEOUT
+            # 终态回执，由上层按既有超时纪律处置（侧效不重放）。
+            return await asyncio.wait_for(
+                self.transport.execute(device_id, req),
+                timeout=max(1.0, req.timeout_ms / 1000)
+                       + self._watchdog_grace_ms / 1000)
+        except (asyncio.TimeoutError, TimeoutError):
+            return ActionReceipt(
+                action_id=req.action_id, status=ReceiptStatus.TIMEOUT,
+                summary=f"transport 悬挂看门狗超时（{req.timeout_ms}ms+15s）",
+                error_code="timeout", provider_ref="core:loop-watchdog",
+                completed_at=now_ms())
         except Exception as exc:  # noqa: BLE001 — transport 异常归一为 failed
             return ActionReceipt(
                 action_id=req.action_id, status=ReceiptStatus.FAILED,

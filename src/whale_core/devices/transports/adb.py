@@ -904,7 +904,10 @@ class AdbTransport(DeviceTransport):
             await self._shell(serial, ["input", "keyevent", keyevent])
             return f"已按键 {key} ({keyevent})", None
         if cap == "device.wait":
-            ms = self._int_arg(args, "ms", None, 0, 60_000)
+            # 参数名兼容：模型向规则学的是 duration_ms（decision._AGENT_RULES），
+            # TS 参考实现用 ms——两者都收（ms 优先），缺省/越界才报错。
+            raw_wait = args.get("ms", args.get("duration_ms"))
+            ms = self._int_arg({"ms": raw_wait}, "ms", None, 0, 60_000)
             await asyncio.sleep(ms / 1000)
             return f"已等待 {ms}ms", None
         if cap == "device.app.launch":

@@ -138,6 +138,8 @@ class GuiTaskService:
     def start(self, device_id: str, goal: str, *,
               max_steps: int = DEFAULT_MAX_STEPS,
               task_timeout_s: int = DEFAULT_TASK_TIMEOUT_S,
+              action_timeout_s: int = DEFAULT_ACTION_TIMEOUT_S,
+              observe_timeout_s: int = DEFAULT_OBSERVE_TIMEOUT_S,
               approval=None) -> dict:
         goal = str(goal or "").strip()
         if not 1 <= len(goal) <= 500:
@@ -146,6 +148,9 @@ class GuiTaskService:
         if isinstance(task_timeout_s, bool):
             raise GuiTaskError("bad_request", "task_timeout_s 非法")
         task_timeout_s = max(10, min(int(task_timeout_s), MAX_TASK_TIMEOUT_S))
+        # 慢机（高负载/GSI）需要更宽的动作与观察窗口；设上下界防失控
+        action_timeout_s = max(1, min(int(action_timeout_s), 120))
+        observe_timeout_s = max(5, min(int(observe_timeout_s), 300))
         # 门控前置：设备状态/基本 scope 在编排层逐动作还会再查，这里先给
         # 调用方一个诚实的 409，而不是跑起来才撞墙。
         registry = self._gw2.registry
@@ -171,6 +176,8 @@ class GuiTaskService:
             "receipts": [], "owner_id": "owner",
             "kind": "gui_agent", "device_id": device_id, "run_id": run_id,
             "max_steps": max_steps, "task_timeout_s": task_timeout_s,
+            "action_timeout_s": action_timeout_s,
+            "observe_timeout_s": observe_timeout_s,
             "events": [{"at": time.time(), "kind": "pending"}],
         }
         self._put_record(record)
@@ -228,8 +235,8 @@ class GuiTaskService:
             GatewayV2Transport(self._gw2),
             max_steps=record["max_steps"],
             task_timeout_ms=record["task_timeout_s"] * 1000,
-            action_timeout_ms=DEFAULT_ACTION_TIMEOUT_S * 1000,
-            observe_timeout_ms=DEFAULT_OBSERVE_TIMEOUT_S * 1000)
+            action_timeout_ms=record["action_timeout_s"] * 1000,
+            observe_timeout_ms=record["observe_timeout_s"] * 1000)
         try:
             result: GuiRunResult = await loop.run(
                 device_id, goal=record["goal"], decision=decision,

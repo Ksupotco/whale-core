@@ -391,7 +391,9 @@ def dispatch_devices(handler, method: str, parts: list[str],
                 record = svc.start(
                     device_id, str(body.get("goal") or ""),
                     max_steps=int(body.get("max_steps") or 50),
-                    task_timeout_s=int(body.get("task_timeout_s") or 600))
+                    task_timeout_s=int(body.get("task_timeout_s") or 600),
+                    action_timeout_s=int(body.get("action_timeout_s") or 10),
+                    observe_timeout_s=int(body.get("observe_timeout_s") or 45))
             except GuiTaskError as exc:
                 send(_GATEWAY_STATUS.get(exc.code, 400)
                      if exc.code != "bad_request" else 400,

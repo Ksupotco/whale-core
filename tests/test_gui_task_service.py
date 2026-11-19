@@ -154,6 +154,28 @@ class TestLifecycle:
             svc.stop("nope")
         assert exc.value.code == "not_found"
 
+    def test_hung_transport_watchdog_yields_timeout_terminal(self):
+        """#58 真机实证：transport 悬挂不得挂死任务——看门狗给 TIMEOUT 终态。"""
+        from whale_core.devices.gui_agent.loop import GuiAgentLoop
+
+        class HungTransport(FakeTransport):
+            async def execute(self, device_id, action):
+                await asyncio.sleep(3600)  # 永远悬挂
+                raise AssertionError("不可达")
+
+        from whale_core.devices.gui_agent.decision import ScriptedDecision
+        loop = GuiAgentLoop(HungTransport([FakeScreen("home")], "home"),
+                            max_steps=10, action_timeout_ms=200,
+                            watchdog_grace_ms=100, max_consecutive_failures=2)
+        result = asyncio.run(loop.run(
+            "dev1", goal="测试",
+            decision=ScriptedDecision([GuiAction(kind="device.tap",
+                                                 arguments={"x": 1, "y": 2})] * 10)))
+        assert result.status == "failed"
+        timeouts = [s for s in result.steps if s.outcome == "timeout"]
+        assert timeouts, "悬挂动作应产生 timeout 步"
+        assert all(s.error_code == "timeout" for s in timeouts)
+
     def test_shutdown_marks_inflight_stopped(self):
         store, registry, gw2, device_id, _ = _rig()
 

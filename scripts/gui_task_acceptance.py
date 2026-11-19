@@ -102,9 +102,9 @@ BILIBILI_STAGES = [
     ("launch", "打开哔哩哔哩应用（包名 tv.danmaku.bili），等到首页或推荐流出现"),
     ("search", "在哔哩哔哩里搜索「鲸鱼」并确认出现搜索结果列表"),
     ("feed", "返回哔哩哔哩首页推荐流，向下滑动浏览至少两条内容"),
-    ("playpause", "在推荐流点开第一个视频，播放约 3 秒后暂停"),
-    ("seek", "在当前视频把播放进度拖到大约一半位置"),
-    ("switch", "返回推荐流，点开另一个不同的视频并确认它正在播放"),
+    ("playpause", "在推荐流点开第一个视频，等待播放器出现并开始播放，然后暂停播放"),
+    ("seek", "在当前视频把播放进度拖到大约一半位置（拖动进度条；不要点分享/下载/评论类按钮）"),
+    ("switch", "返回推荐流，点开另一个不同的视频并确认它正在播放（避免分享/下载类按钮）"),
     ("exit", "退出哔哩哔哩，回到桌面"),
 ]
 
@@ -118,6 +118,9 @@ def main() -> int:
     parser.add_argument("--key", default="/root/.ssh/android")
     parser.add_argument("--skip-bilibili", action="store_true")
     parser.add_argument("--stages-timeout", type=float, default=900.0)
+    # 慢机（GSI/高负载）放宽动作与观察窗口
+    parser.add_argument("--action-timeout", type=int, default=45)
+    parser.add_argument("--observe-timeout", type=int, default=150)
     args = parser.parse_args()
 
     preset = PRESETS.get(args.device or "", {})
@@ -166,13 +169,23 @@ def main() -> int:
             status, body = api(token, "POST",
                                f"/api/v1/devices/{device_id}/gui_tasks",
                                {"goal": goal, "max_steps": 20,
-                                "task_timeout_s": 600})
+                                "task_timeout_s": 600,
+                                "action_timeout_s": args.action_timeout,
+                                "observe_timeout_s": args.observe_timeout})
             if status != 202:
                 check(f"P1.{stage}", False, f"submit {status}: {body}")
                 continue
             task_id = body["result"]["task_id"]
-            final = wait_task(token, device_id, task_id,
-                              timeout_s=args.stages_timeout)
+            try:
+                final = wait_task(token, device_id, task_id,
+                                  timeout_s=args.stages_timeout)
+            except TimeoutError:
+                # 阶段超时：先停任务（顺带实证 stop 路径），如实记 FAIL 再继续
+                api(token, "POST",
+                    f"/api/v1/devices/{device_id}/gui_tasks/{task_id}/stop")
+                check(f"P1.{stage}", False,
+                      f"stage timeout {args.stages_timeout}s（已发停止）task={task_id}")
+                continue
             steps = len(final.get("steps") or [])
             check(f"P1.{stage}", final["status"] == "succeeded",
                   f"status={final['status']} reason={final.get('reason')} "
@@ -184,7 +197,9 @@ def main() -> int:
     # 停止：长浏览任务 → stop → stopped
     status, body = api(token, "POST", f"/api/v1/devices/{device_id}/gui_tasks",
                        {"goal": "在当前界面持续向下浏览推荐内容",
-                        "max_steps": 50, "task_timeout_s": 600})
+                        "max_steps": 50, "task_timeout_s": 600,
+                        "action_timeout_s": args.action_timeout,
+                        "observe_timeout_s": args.observe_timeout})
     if status == 202:
         task_id = body["result"]["task_id"]
         time.sleep(8)
