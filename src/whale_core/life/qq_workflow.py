@@ -334,7 +334,8 @@ class QqInboundWorkflow:
         mids: list[str] = []
         if conv.startswith("group:"):
             from whale_core.memory.timeline import GroupTimelineStore
-            for e in reversed(GroupTimelineStore(self.store).recent(conv, limit=8)):
+            for e in reversed(GroupTimelineStore(self.store).recent(
+            conv, limit=50)):  # 话密顶出浅窗实证：扫深 50（时间窗才是真边界）
                 if str(e.get("sender_id") or "") != sender:
                     continue
                 try:
@@ -374,7 +375,8 @@ class QqInboundWorkflow:
             try:
                 from whale_core.memory.timeline import GroupTimelineStore
                 cands: list[str] = []
-                for e in GroupTimelineStore(self.store).recent(conv, limit=8):
+                for e in GroupTimelineStore(self.store).recent(
+            conv, limit=50):  # 话密顶出浅窗实证：扫深 50（时间窗才是真边界）
                     if not isinstance(e, dict):
                         continue
                     mid2 = str(e.get("message_id") or "")
