@@ -123,7 +123,19 @@ def test_intent_model_error_falls_back_to_chat():
     orch = _orch(store, brain, intent_model=ScriptedIntentModel(boom))
     result = orch.handle_message("c", "你好")
     assert result.status == "answered"
-    assert result.receipts == ("intent:model-error→plain-chat",)
+    # 2026-11-19（Tob d 案）：receipt 带上游摘要（类型+状态码），不落原文
+    assert result.receipts[0].startswith("intent:model-error→plain-chat up=RuntimeError")
+    assert "模型挂了" not in result.receipts[0]
+
+
+def test_intent_model_error_digest_extracts_http_status():
+    from whale_core.core.runtime.turn_orchestration import _upstream_digest
+
+    class _HTTPLike(Exception):
+        pass
+    exc = _HTTPLike("HTTP Error 405: Method Not Allowed")
+    assert _upstream_digest(exc) == " up=_HTTPLike:405"
+    assert _upstream_digest(RuntimeError("plain failure")) == " up=RuntimeError"
 
 
 # ---------- 任务执行 ----------

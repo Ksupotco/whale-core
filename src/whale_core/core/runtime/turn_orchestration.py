@@ -82,6 +82,17 @@ def intent_brain_timeout(env) -> float:
     return value if value > 0 else 15.0
 
 
+def _upstream_digest(exc: BaseException) -> str:
+    """上游错误摘要（2026-11-19 Tob 定 d 案）：类型名 + HTTP 状态码（若有）。
+
+    只取类型与状态码——不落异常原文（上游 body 可能含密钥/提示词残片）。
+    """
+    import re as _re
+    name = type(exc).__name__
+    match = _re.search(r"\b([1-5]\d\d)\b", str(exc) or "")
+    return f" up={name}:{match.group(1)}" if match else f" up={name}"
+
+
 def intent_skip_chitchat(env) -> bool:
     return str((env or {}).get("WHALE_INTENT_SKIP_CHITCHAT") or "").strip() == "1"
 
@@ -528,8 +539,12 @@ class TurnOrchestrationMixin:
                         allowed_spaces=_ctx_spaces(env.context))))
         except IntentPlanError:
             return _Decision(route="chat", receipt="intent:parse-failed→plain-chat")
-        except Exception:
-            return _Decision(route="chat", receipt="intent:model-error→plain-chat")
+        except Exception as exc:
+            # 2026-11-19（Tob 定 d 案）：receipt 带上游错误摘要（类型+HTTP 状态码），
+            # 不落上游 body 原文（可能含密钥/提示词残片）。
+            return _Decision(route="chat",
+                             receipt="intent:model-error→plain-chat"
+                                     + _upstream_digest(exc))
         if plan.kind == "chat":
             return _Decision(route="chat", plan=plan)
         if plan.kind == "clarify" or plan.needs_clarification:

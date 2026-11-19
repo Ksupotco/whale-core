@@ -176,8 +176,9 @@ def test_recent_peer_image_other_sender_single_pic_with_deictic():
     assert images == ((PNG, "image/png"),)
 
 
-def test_recent_peer_image_multiple_pics_no_guess():
-    """窗口内多张带图消息 → 不猜，返回空（诚实说看不到）。"""
+def test_recent_peer_image_multiple_pics_attach_recent():
+    """2026-11-19 修订（Tob a 案）：多张不再不猜而空——回落带图上下文，
+    窗口内最近 ≤3 张一并给模型看（看清全部 recent，无「挑错一张」）。"""
     store = InMemoryStore()
     tl = GroupTimelineStore(store)
     _plant_image(store, "m-p1")
@@ -187,7 +188,21 @@ def test_recent_peer_image_multiple_pics_no_guess():
     tl.append(GROUP, message_id="m-p2", sender_id="3757951060",
               text="[pic]", send_time=str(time.time() - 60))
     wf = _wf(store)
-    assert wf._recent_peer_image(_ev(text="评价下这个图")) == ()
+    images = wf._recent_peer_image(_ev(text="评价下这个图"))
+    assert len(images) == 2  # 两张都进上下文（_plant_image 同字节 → 同内容）
+
+
+def test_recent_peer_image_sticker_deictic():
+    """「这个表情包很萌啊」式表情包指代也命中（11-19 21:10 实证缺口）。"""
+    store = InMemoryStore()
+    tl = GroupTimelineStore(store)
+    _plant_image(store, "m-sticker")
+    tl.append(GROUP, message_id="m-sticker", sender_id="3510294135",
+              text="[pic]", send_time=str(time.time() - 30))
+    wf = _wf(store)
+    images = wf._recent_peer_image(
+        _ev(text="投降了喵 这个表情包很萌啊 你有没有保存"))
+    assert images == ((PNG, "image/png"),)
 
 
 def test_recent_peer_image_other_sender_out_of_window():

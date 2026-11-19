@@ -25,9 +25,10 @@ from whale_core.memory.store import MemoryStore
 
 REPLY_CHANNEL = "direct_message"
 
-#: 无引用指代看图的触发词（2026-11-18 扩展兜底，Tob 批准：「这个图/这图/
-#: 上图/这张图/评价下」——指向明确才补读他人近期图，否则不猜）。
-_RECENT_IMAGE_DEICTIC_RE = re.compile(r"这个图|这图|上图|这张图|评价下")
+#: 无引用指代看图的触发词（2026-11-18 扩展兜底，Tob 批准；11-19 加表情包
+#: 指代——21:10 实证「这个表情包很萌啊」未命中）。指向明确才补读，否则不猜。
+_RECENT_IMAGE_DEICTIC_RE = re.compile(
+    r"这个图|这图|上图|这张图|评价下|这个表情|这表情|这张表情")
 
 
 def _default_media_roots() -> tuple[str, ...]:
@@ -367,8 +368,10 @@ class QqInboundWorkflow:
             if got:
                 return got
         # 2026-11-18 扩展（Tob 批准）：同发送者无命中时——群聊且当前消息含
-        # 指代词，且窗口内全群仅一张带图消息（任何群友）→ 补读那张；
-        # 多张/零张不猜（返回空，由人格诚实说看不到/问哪张）。
+        # 指代词，窗口内带图消息（任何群友）补读。
+        # 2026-11-19 修订（Tob 定 a 案）：多张不再不猜而空——回落必须带图上下文：
+        # 取窗口内最近 ≤3 张一并给模型看（看清全部 recent，不存在「挑错一张」）；
+        # 零张才返回空（诚实说看不到）。
         if conv.startswith("group:"):
             text_now = str(getattr(event, "text", "") or "")
             if _RECENT_IMAGE_DEICTIC_RE.search(text_now):
@@ -389,10 +392,13 @@ class QqInboundWorkflow:
                             continue
                         if self.store.get(f"msgimg:{mid2}"):
                             cands.append(mid2)
-                    if len(cands) == 1:
-                        got = self._read_msgimg(cands[0])
+                    out: list = []
+                    for mid2 in reversed(cands[-3:]):  # 最新优先，至多 3 张
+                        got = self._read_msgimg(mid2)
                         if got:
-                            return got
+                            out.extend(got)
+                    if out:
+                        return tuple(out)
                 except Exception:
                     pass
         return ()
