@@ -1095,10 +1095,50 @@ def make_handler(delegates):
                 self.close_connection = True
                 return None
 
+        def _identity(self):
+            """GET /v1/identity —— phone 角色身份与绑定设备（2026-11-19，
+            Assignment 单屏绑定用）。无 token → 401；已知但非 phone 角色
+            凭据（管理面 token）→ 403；phone token → 200。"""
+            if not self._authorized():
+                header = self.headers.get("Authorization", "")
+                api_tok = getattr(self.server, "glasses_api_token", "")
+                if (api_tok and header.startswith("Bearer ")
+                        and secrets.compare_digest(header[7:].strip(), api_tok)):
+                    self.close_connection = True
+                    _json_response(self, 403, {"error": "forbidden"})
+                else:
+                    self.close_connection = True
+                    _json_response(self, 401, {"error": "unauthorized"})
+                return
+            device, label = "", ""
+            try:
+                from whale_core.devices.registry import DeviceRegistry
+                store = delegates.get("store")
+                devices = [d for d in DeviceRegistry(store).list_devices()
+                           if d.get("status") == "active"]
+                env = getattr(self.server, "glasses_env", {}) or {}
+                pin = (env.get("WHALE_GLASSES_DEVICE_ID") or "").strip()
+                sel = None
+                if pin:
+                    sel = next((d for d in devices
+                                if str(d.get("device_id") or "") == pin), None)
+                if sel is None and devices:
+                    sel = devices[0]
+                if sel:
+                    device = str(sel.get("device_id") or "")
+                    label = str(sel.get("label") or "")[:120]
+            except Exception:
+                pass  # 注册表故障 fail-soft：身份仍如实回（device 空串）
+            _json_response(self, 200, {"role": "phone", "device": device,
+                                       "label": label})
+
         def do_GET(self):
+            if self.path == "/v1/identity":
+                self._identity()
+                return
             if self.path == "/v1/health":
                 _json_response(self, 200, {"ok": True,
-                                           "capabilities": ["/v1/chat", "/v1/context/sync", "/v1/agent", "/v1/chat/followup", "/v1/qq/reply", "/v1/result/deliver",
+                                           "capabilities": ["/v1/chat", "/v1/context/sync", "/v1/agent", "/v1/chat/followup", "/v1/qq/reply", "/v1/result/deliver", "/v1/identity",
                                                             "/v1/rayneo/ingest", "/v1/rayneo/query", "/v1/rayneo/control"]})
                 return
             if self.path == "/openapi.json":
@@ -1546,6 +1586,10 @@ def _openapi() -> dict:
                                           "security": [{"bearerAuth": []}]}},
             "/v1/rayneo/control": {"post": {"summary": "雷鸟转写删除/开关",
                                             "security": [{"bearerAuth": []}]}},
+            "/v1/identity": {"get": {
+                "summary": "phone 角色身份与绑定设备（200 {role,device,label}；"
+                           "无 token 401，非 phone 角色已知凭据 403）",
+                "security": [{"bearerAuth": []}]}},
             "/v1/health": {"get": {"summary": "存活与能力"}},
         },
         "components": {"securitySchemes": {
@@ -1576,6 +1620,8 @@ def main(argv=None) -> int:
     server.glasses_token = cfg.token  # type: ignore[attr-defined]
     server.owner_uin = cfg.owner_uin  # type: ignore[attr-defined]
     server.glasses_env = env  # type: ignore[attr-defined]
+    # /v1/identity 的 403 口径：已知但非 phone 角色的凭据（管理面 token）
+    server.glasses_api_token = (env.get("WHALE_API_TOKEN") or "").strip()  # type: ignore[attr-defined]
 
     greeting_loop = None
     try:
