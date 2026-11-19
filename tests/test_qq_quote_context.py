@@ -205,6 +205,20 @@ def test_recent_peer_image_sticker_deictic():
     assert images == ((PNG, "image/png"),)
 
 
+def test_recent_peer_image_full_word_deictic():
+    """「这张图片/这个照片」全词形态也命中（11-19 21:37 实证缺口）。"""
+    store = InMemoryStore()
+    tl = GroupTimelineStore(store)
+    _plant_image(store, "m-full")
+    tl.append(GROUP, message_id="m-full", sender_id="3510294135",
+              text="[pic]", send_time=str(time.time() - 30))
+    wf = _wf(store)
+    images = wf._recent_peer_image(_ev(text="找一下我这张图片里面的亮点"))
+    assert images == ((PNG, "image/png"),)
+    images2 = wf._recent_peer_image(_ev(text="这个照片是谁拍的"))
+    assert images2 == ((PNG, "image/png"),)
+
+
 def test_recent_peer_image_other_sender_out_of_window():
     """他人图但超出 180s 窗口 → 不补。"""
     store = InMemoryStore()
@@ -217,14 +231,56 @@ def test_recent_peer_image_other_sender_out_of_window():
 
 
 def test_recent_peer_image_other_sender_without_deictic():
-    """无指代词（只喊名字）→ 不补读他人图。"""
+    """2026-11-19（Tob 定①）：群聊回复回合无条件补读——无指代词也补
+    （图与问句不同消息不同回合，指代门槛实证漏报）。"""
     store = InMemoryStore()
     tl = GroupTimelineStore(store)
     _plant_image(store, "m-theirs")
     tl.append(GROUP, message_id="m-theirs", sender_id="3510294135",
               text="[pic]", send_time=str(time.time() - 60))
     wf = _wf(store)
-    assert wf._recent_peer_image(_ev(text="@Enxi 吃了吗")) == ()
+    assert wf._recent_peer_image(_ev(text="@Enxi 吃了吗")) == ((PNG, "image/png"),)
+
+
+def test_recent_peer_image_caps_at_three():
+    """窗口内 >3 张图：只带最近 3 张。"""
+    store = InMemoryStore()
+    tl = GroupTimelineStore(store)
+    for i in range(5):
+        _plant_image(store, f"m-p{i}")
+        tl.append(GROUP, message_id=f"m-p{i}", sender_id="3510294135",
+                  text="[pic]", send_time=str(time.time() - (100 - i * 10)))
+    wf = _wf(store)
+    images = wf._recent_peer_image(_ev(text="看看"))
+    assert len(images) == 3
+
+
+def test_recent_peer_image_zero_pics_stays_empty():
+    """窗口内零图 → 空（诚实说看不到，不编）。"""
+    store = InMemoryStore()
+    tl = GroupTimelineStore(store)
+    tl.append(GROUP, message_id="m-txt", sender_id="3510294135",
+              text="纯文字", send_time=str(time.time() - 30))
+    wf = _wf(store)
+    assert wf._recent_peer_image(_ev(text="看看这个图")) == ()
+
+
+def test_recent_peer_image_private_path_unchanged():
+    """私聊路径不变：同发送者近期环补读；他人图不补（Tob 定①只改群路径）。"""
+    store = InMemoryStore()
+    conv = "private:u_x"
+    _plant_image(store, "m-priv")
+    store.put(f"recentmsg:{conv}", [
+        {"mid": "m-priv", "sender": "2440542747", "text": "[图片]",
+         "ts": time.time() - 30},
+    ])
+    wf = _wf(store)
+    # 同发送者 → 补读（不变）
+    assert wf._recent_peer_image(
+        _ev(conversation=conv, sender_id="2440542747")) == ((PNG, "image/png"),)
+    # 私聊他人图不补（环里 sender 对不上）→ 空（不变）
+    assert wf._recent_peer_image(
+        _ev(conversation=conv, sender_id="999")) == ()
 
 
 def test_quote_fallback_picks_latest_image_from_quoted_sender():
