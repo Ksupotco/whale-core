@@ -958,10 +958,32 @@ def build_delegates(env: dict, *, brain_factory=None, quick_brain_factory=None,
                               for r in receipts)
             return ok, (detail or "no_device")[:180]
 
+        # send_to 薄层：群走端口白名单内 send_group_text、私聊 send_c2c；
+        # 目标校验在 agent 层（白名单/非 owner 批准门），端口再兜底。
+        def _send_target(peer_type, target, text):
+            port = send_port_factory()
+            fn = getattr(port, "send_group_text" if peer_type == "group"
+                         else "send_c2c", None)
+            if fn is None:
+                return False, "no-send-method"
+            try:
+                ok = fn(target, text)
+            except Exception as exc:
+                return False, type(exc).__name__
+            inner = getattr(port, "_inner", port)
+            receipt = getattr(inner, "last_receipt", None)
+            detail = "sent" if ok else "send_failed"
+            if isinstance(receipt, dict) and receipt.get("ok") is False:
+                detail = str(receipt.get("error") or detail)[:120]
+            return bool(ok), detail
+
         agent = GlassesAgent(
             store=store,
             chat=_agent_chat,
             workspace=_AgentPath(cfg.store_path).parent / "workspace",
+            send_target=_send_target,
+            allowed_groups=(env.get("WHALE_QQ_GROUP_ALLOW") or "").split(","),
+            owner_uid=cfg.owner_uid,
             notify_gateway=NotifyUserGateway(
                 deliver=_notify_deliver, qq=qq_send, phone=_notify_phone),
             # 软限转后台的结果经统一投递链路推送（QQ/通知/补传口径不变）

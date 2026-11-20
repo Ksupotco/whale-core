@@ -502,6 +502,10 @@ def _parse_notify(text: str) -> tuple[str, str, str] | None:
 _CMD_PREFIXES = ("cmd:", "shell:", "执行:")
 _SELFMODIFY_PREFIXES = ("selfmodify:", "self-modify:", "自修改:")
 _WRITE_PREFIXES = ("write:", "写文件:")
+_SENDTO_PREFIXES = ("send_to:", "sendto:", "发给:")
+
+#: send_to 目标形态：owner / group:<群号> / private:<uid>（uid 为 u_ 前缀）
+_SENDTO_TARGET_RE = re.compile(r"^(owner|group:\d{4,20}|private:u_[A-Za-z0-9_-]{2,62})$")
 
 _TIME_KEYS = ("几点", "现在时间", "what time")
 _SCHEDULE_KEYS = ("日程", "安排", "行程", "日历")
@@ -519,6 +523,15 @@ def _classify(text: str) -> tuple[str, object]:
         if lower.startswith(prefix) or stripped.startswith(prefix):
             instruction = stripped[len(prefix):].strip()
             return ("self_modify", instruction) if instruction else ("chat", stripped)
+    for prefix in _SENDTO_PREFIXES:
+        if lower.startswith(prefix) or stripped.startswith(prefix):
+            rest = stripped[len(prefix):].lstrip()
+            target, sep, content = rest.partition(":")
+            target = target.strip()
+            content = content.strip()
+            if target and sep and content:
+                return ("send", (target, content))
+            return ("chat", stripped)
     for prefix in _WRITE_PREFIXES:
         if lower.startswith(prefix) or stripped.startswith(prefix):
             rest = stripped[len(prefix):].lstrip()
@@ -565,6 +578,7 @@ class GlassesAgent:
                  workspace=None, deliver=None,
                  notify_gateway: NotifyUserGateway | None = None,
                  notify_budget: NotifyBudget | None = None,
+                 send_target=None, allowed_groups=(), owner_uid="",
                  max_steps: int | None = None, bg_max_steps: int | None = None,
                  soft_limit_s: float | None = None,
                  bg_timeout_s: float | None = None,
@@ -584,6 +598,11 @@ class GlassesAgent:
         self.workspace = str(workspace) if workspace else ""
         self.deliver = deliver
         self.notify_gateway = notify_gateway
+        # send_to 薄层（2026-11-19 Tob 派）：跨渠道定向发送
+        self.send_target = send_target
+        self.allowed_groups = frozenset(str(g).strip() for g in allowed_groups
+                                        if str(g).strip())
+        self.owner_uid = str(owner_uid or "")
         if notify_budget is not None:
             self.notify_budget = notify_budget
         else:
@@ -658,6 +677,9 @@ class GlassesAgent:
             return self._interactive(
                 session_id, f"tool:{arg}", str(arg), started,
                 lambda: self._readonly_turn(str(arg), session_id, started))
+        if intent == "send":
+            target, content = arg  # type: ignore[misc]
+            return self._gate_send(target, content, session_id, started)
         if intent == "notify":
             channel, urgency, note = arg  # type: ignore[misc]
             return self._interactive(
@@ -850,6 +872,84 @@ class GlassesAgent:
                       "status": "ok" if ok else "fail",
                       "output_digest": _c200(digest)}])
 
+    # -- 门控：send_to 跨渠道定向发送（2026-11-19 Tob 派） -------------------------
+    # 群必须 allowed_groups 白名单；非 owner 私聊走 pending 两阶段（owner 批准门）；
+    # owner 直发；未知 target 诚实报错；三通道 notify 语义不动。
+    def _gate_send(self, target: str, content: str, session_id: str,
+                   started: float) -> dict:
+        summary = f"定向发送：{target[:40]}"
+        if not content.strip():
+            return self._send_fail(session_id, summary, "内容为空", started)
+        if self.send_target is None:
+            return self._send_fail(session_id, summary, "发送通道未装配", started)
+        if target in ("owner", "me", ""):
+            return self._exec_send(session_id, "c2c", self.owner_uid, content,
+                                   started, summary, "owner 私聊直发")
+        if target.startswith("group:"):
+            code = target.split(":", 1)[1]
+            if code not in self.allowed_groups:
+                return self._send_fail(session_id, summary,
+                                       f"群 {code} 不在白名单", started,
+                                       verdict="denied")
+            return self._interactive(
+                session_id, "send", summary, started,
+                lambda: self._exec_send(session_id, "group", code, content,
+                                        started, summary))
+        if target.startswith("private:"):
+            uid = target.split(":", 1)[1]
+            if uid == self.owner_uid:
+                return self._interactive(
+                    session_id, "send", summary, started,
+                    lambda: self._exec_send(session_id, "c2c", uid, content,
+                                            started, summary))
+            # 非 owner 私聊：owner 批准门（复用 pending 两阶段回声）
+            confirm_id = self.pending.create(
+                session_id=session_id, kind="send",
+                description=f"发给私聊 {uid}",
+                exact=f"send private:{uid}\n{content}"[:MAX_EXACT_CHARS],
+                payload={"peer_type": "c2c", "target": uid, "text": content})
+            self._audit(session_id, "send", summary, "held", "等待 owner 确认",
+                        turn_class="interactive", started=started)
+            return self._response(
+                session_id,
+                f"这要发给私聊 {uid}（不是你），请确认镜片内容后我再发：{content[:80]}",
+                actions=[{"kind": "send", "summary": _c200(summary),
+                          "status": "held", "output_digest": "等待确认"}],
+                pending={"confirmId": confirm_id, "kind": "send",
+                         "description": f"发给私聊 {uid}",
+                         "exact": f"send private:{uid}\n{content}"[:MAX_EXACT_CHARS]})
+        return self._send_fail(session_id, summary,
+                               f"未知目标 {target[:40]!r}（支持 owner/group:/private:）",
+                               started)
+
+    def _send_fail(self, session_id, summary, reason, started, verdict="fail"):
+        self._audit(session_id, "send", summary, verdict, reason,
+                    turn_class="interactive", started=started)
+        return self._response(
+            session_id, f"没发出去：{reason}。",
+            actions=[{"kind": "send", "summary": _c200(summary),
+                      "status": "denied" if verdict == "denied" else "fail",
+                      "output_digest": _c200(reason)}])
+
+    def _exec_send(self, session_id, peer_type, target, text, started, summary,
+                   note=""):
+        held = self._steps_over(1, "interactive")
+        if held:
+            return self._held(session_id, "send", summary, held, started)
+        try:
+            ok, detail = self.send_target(peer_type, target, text)
+        except Exception as exc:
+            ok, detail = False, type(exc).__name__
+        self._audit(session_id, "send", summary, "ok" if ok else "fail",
+                    _c200(detail), turn_class="interactive", started=started)
+        reply = (f"发出去了（{note or peer_type}）。" if ok
+                 else f"没发出去：{str(detail)[:60]}。")
+        return self._response(
+            session_id, reply,
+            actions=[{"kind": "send", "summary": _c200(summary),
+                      "status": "ok" if ok else "fail",
+                      "output_digest": _c200(detail)}])
+
     # -- 门控：shell ------------------------------------------------------------
     def _gate_shell(self, command: str, session_id: str, started: float) -> dict:
         summary = f"执行命令：{command[:80]}"
@@ -990,6 +1090,11 @@ class GlassesAgent:
                               held, started)
         if item["kind"] == "shell":
             return self._exec_shell(session_id, item, started)
+        if item["kind"] == "send":
+            return self._exec_send(session_id, item["payload"]["peer_type"],
+                                   item["payload"]["target"],
+                                   item["payload"]["text"], started,
+                                   item["description"])
         return self._exec_write(session_id, item, started)
 
     def _exec_shell(self, session_id: str, item: dict, started: float) -> dict:
