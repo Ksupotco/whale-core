@@ -47,7 +47,7 @@ from whale_core.memory.timeline import GroupTimelineStore
 A_UIN = "10001"
 B_UIN = "10002"
 A_PRINCIPAL = f"anon:qq:{A_UIN}"
-GROUP = "group:1124744261"
+GROUP = "group:10001"
 A_PRIVATE = f"private:{A_UIN}"
 B_PRIVATE = f"private:{B_UIN}"
 A_PRIVATE_KEY = f"qq:qq_private:{A_PRIVATE}"

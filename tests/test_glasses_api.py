@@ -48,7 +48,7 @@ def server(tmp_path):
         "WHALE_GLASSES_TOKEN": "phone-token",
         "WHALE_GLASSES_STORE": store_path,
         "OWNER_UID": "u_owner",
-        "OWNER_QQ": "3563425362",
+        "OWNER_QQ": "1000000020",
         "DAILY_LIMIT": "10",
         "PASSIVE_DAILY_LIMIT": "50",
         "QUIET_START": "22",
@@ -63,7 +63,7 @@ def server(tmp_path):
     from http.server import ThreadingHTTPServer
     srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(delegates))
     srv.glasses_token = "phone-token"
-    srv.owner_uin = "3563425362"
+    srv.owner_uin = "1000000020"
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     srv._test_port = srv.server_address[1]
     srv.fake_port = port_holder

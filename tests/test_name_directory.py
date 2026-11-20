@@ -21,10 +21,10 @@ def _fetch(rows):
 def test_resolve_group_card_preferred_then_nick():
     store = InMemoryStore()
     d = WeqNameDirectory(store, fetch=_fetch([
-        {"uid": "u_a", "uin": "10001", "card": "游荡者", "nick": "枕竹听"},
+        {"uid": "u_a", "uin": "10001", "card": "游荡者", "nick": "测试成员B"},
         {"uid": "u_b", "uin": "10002", "card": "", "nick": "阿白"},
     ]))
-    out = d.resolve_group("1124744261", [("10001", "u_a"), ("10002", "u_b")])
+    out = d.resolve_group("10001", [("10001", "u_a"), ("10002", "u_b")])
     assert out == {"10001": "游荡者", "10002": "阿白"}
 
 

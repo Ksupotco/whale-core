@@ -35,7 +35,7 @@ GROUP = ConversationRef("qq", ConversationKind.QQ_GROUP, "group:123")
 PRIVATE = ConversationRef("qq", ConversationKind.QQ_PRIVATE, "u_stranger")
 
 STRANGER = Principal("anon:qq:u_stranger", paired=False, is_owner=False, evidence="none")
-OWNER = Principal("owner", paired=True, is_owner=True, evidence="owner_registry:qq:3899713055")
+OWNER = Principal("owner", paired=True, is_owner=True, evidence="owner_registry:qq:1000000040")
 
 
 def _ctx(principal: Principal, conv: ConversationRef, spaces=()) -> ResolvedContext:

@@ -7,6 +7,8 @@
  * - 底部「高级」保留原全局关键词搜索与 NDJSON 导出。
  */
 import { useCallback, useEffect, useState } from "react";
+import MemoryGraph from './MemoryGraph';
+import GroupDigest from './GroupDigest';
 import {
   api,
   ApiError,
@@ -92,6 +94,11 @@ export default function MemoryView() {
   const [portrait, setPortrait] = useState<PortraitOwner[]>([]);
   const [history, setHistory] = useState<MemoryFactHistory | null>(null);
   const [historyKey, setHistoryKey] = useState("");
+  const archiveGroups = subjects?.groups.filter(g => /^group-\d+$/.test(g.space_id)) ?? [];
+  const graphSpace = sel?.spaceId ?? (archiveGroups.length === 1 ? archiveGroups[0].space_id : '');
+  const [groupRevision,setGroupRevision] = useState(0);
+  const graphGroup = archiveGroups.find(g => g.space_id === graphSpace);
+  const showOwnerPortrait = Boolean(subjects && !graphGroup);
 
   const showHistory = async (key: string) => {
     if (historyKey === key) {
@@ -110,7 +117,7 @@ export default function MemoryView() {
     catch (e) { setError(friendlyError(e)); }
   }, []);
 
-  useEffect(() => { void loadPortrait(); }, [loadPortrait]);
+  useEffect(() => { if (showOwnerPortrait) void loadPortrait(); }, [loadPortrait, showOwnerPortrait]);
 
   const changePortrait = async (body: Parameters<typeof studioApi.changePortrait>[0]) => {
     try {
@@ -455,8 +462,18 @@ export default function MemoryView() {
 
       {error && <div className="banner error">{error}</div>}
       {notice && <div className="banner ok">{notice}</div>}
+      {archiveGroups.length > 0 && <label className="graph-space-picker">群聊空间
+        <select value={graphGroup?.space_id ?? ''} onChange={e=>{
+          const group=archiveGroups.find(g=>g.space_id===e.target.value);
+          if(group) pickSpace(group);
+        }}>
+          {!graphGroup && <option value="">选择群聊查看关键词</option>}
+          {archiveGroups.map(g=><option key={g.space_id} value={g.space_id}>{g.name}</option>)}
+        </select></label>}
+      <MemoryGraph key={graphSpace} revision={groupRevision} spaceId={graphSpace} groupId={graphGroup?.space_id.slice(6)} />
+      {graphGroup && <GroupDigest key={'digest:'+graphSpace} gid={graphSpace.slice(6)} onUpdated={()=>setGroupRevision(v=>v+1)} />}
 
-      <section className="memory-browse" aria-label="情绪与画像">
+      {showOwnerPortrait && <section className="memory-browse" aria-label="情绪与画像">
         <h3>情绪与画像</h3>
         {portrait.length === 0 && <p className="muted small">暂无情绪事件或画像。</p>}
         {portrait.map((owner) => <div key={owner.owner_id}>
@@ -509,7 +526,7 @@ export default function MemoryView() {
             </div>
           </li>)}</ul>
         </div>)}
-      </section>
+      </section>}
 
       {subjectsLoading && !subjects && (
         <p className="muted">正在加载主体总览…</p>

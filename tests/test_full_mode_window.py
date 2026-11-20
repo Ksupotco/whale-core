@@ -283,8 +283,8 @@ def test_direct_sends_go_through_window(tmp_path):
 
     assert port.send_c2c("u_x", "在吗") is True
     assert win.open_calls == 1             # 第一次直发触发开窗
-    assert port.send_group_text("1124744261", "群里好") is True
-    assert port.send_video_to("group", "1124744261", b"\x00\x00") is True
+    assert port.send_group_text("10001", "群里好") is True
+    assert port.send_video_to("group", "10001", b"\x00\x00") is True
     assert win.open_calls == 1             # 已开窗不重复开
     assert [c[0] for c in port._inner.calls] == ["c2c", "group", "video"]
     assert win.touch_calls >= 4            # open 落档 + 每次发送续期

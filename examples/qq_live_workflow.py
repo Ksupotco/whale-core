@@ -1921,11 +1921,11 @@ def cmd_run(args) -> int:
         for e in list(entries or ())[-6:]:
             if not isinstance(e, dict):
                 continue
-            who = "Enxi" if e.get("is_self") else "群友"
+            who = "助手" if e.get("is_self") else "群友"
             body = " ".join(str(e.get("text") or "").split())[:80]
             if body:
                 lines.append(f"{who}：{body}")
-        name = bot_aliases[0] if bot_aliases else "Enxi"
+        name = bot_aliases[0] if bot_aliases else "机器人"
         prompt = (
             f"判断一条群聊消息是不是在对群里名叫「{name}」的机器人说话"
             "（叫她回应、让她做事、接着她的话头说事都算；群友之间互相聊、"
@@ -1946,11 +1946,11 @@ def cmd_run(args) -> int:
         for e in list(entries or ())[-8:]:
             if not isinstance(e, dict):
                 continue
-            who = "Enxi" if e.get("is_self") else "群友"
+            who = "助手" if e.get("is_self") else "群友"
             body = " ".join(str(e.get("text") or "").split())[:60]
             if body:
                 lines.append(f"{who}：{body}")
-        name = bot_aliases[0] if bot_aliases else "Enxi"
+        name = bot_aliases[0] if bot_aliases else "机器人"
         prompt = (
             f"群聊里正在复读刷屏这句话：「{str(chain_text)[:60]}」。\n"
             + ("群聊最近消息：\n" + "\n".join(lines) + "\n" if lines else "")

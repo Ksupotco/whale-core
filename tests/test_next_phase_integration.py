@@ -26,8 +26,8 @@ from whale_core.memory.spaces import SpaceStore
 from whale_core.memory.store import InMemoryStore
 from whale_core.memory.timeline import GroupTimelineStore
 
-SELF_UIN = "3899713055"
-GROUP = "1124744261"
+SELF_UIN = "1000000040"
+GROUP = "10001"
 A_UIN, B_UIN = "10001", "10002"
 
 

@@ -27,6 +27,7 @@ class MemoryKind(str, Enum):
     EPISODE = "episode"
     PREFERENCE = "preference"
     PERSONA_CONTINUITY = "persona_continuity"
+    GROUP_PROFILE = "group_profile"
 
 
 @dataclass(frozen=True)
@@ -54,7 +55,7 @@ class PersonaContinuity:
     由 MemoryStore 读写 stub；真正持久化后端可后续替换。
     """
 
-    persona_name: str = "Enxi"
+    persona_name: str = ""
     tone: str = "冷静、简洁、略带幽默"
     address_user_as: str = "你"
     taboos: tuple[str, ...] = ()
@@ -95,7 +96,7 @@ class PersonaContinuity:
         else:
             updated_at = _utc_now()
         return cls(
-            persona_name=str(c.get("persona_name") or "Enxi"),
+            persona_name=str(c.get("persona_name") or ""),
             tone=str(c.get("tone") or ""),
             address_user_as=str(c.get("address_user_as") or "你"),
             taboos=tuple(taboos),

@@ -37,7 +37,7 @@ def test_default_closed_stranger_private(monkeypatch):
 def test_default_closed_group(monkeypatch):
     monkeypatch.delenv("WHALE_MEDIA_OPEN_TEST", raising=False)
     ctx = make_resolver().resolve(
-        channel="qq", sender_id="member-1", conversation_id="group:1124744261")
+        channel="qq", sender_id="member-1", conversation_id="group:10001")
     assert ctx.capability_scopes == GROUP_CEILING
     for s in MEDIA_GENERATION_SCOPES:
         assert s not in ctx.capability_scopes
@@ -58,7 +58,7 @@ def test_open_group_ceiling_gets_media(monkeypatch):
     monkeypatch.setenv("WHALE_MEDIA_OPEN_TEST", "1")
     for sender in ("member-1", OWNER_QQ):  # 群里含主人也按同一上限
         ctx = make_resolver().resolve(
-            channel="qq", sender_id=sender, conversation_id="group:1124744261")
+            channel="qq", sender_id=sender, conversation_id="group:10001")
         for s in MEDIA_GENERATION_SCOPES:
             assert s in ctx.capability_scopes
         assert "outbox.submit" not in ctx.capability_scopes

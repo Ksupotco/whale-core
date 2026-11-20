@@ -220,11 +220,52 @@ class WhaleCompanion:
             curator=self.curator, query=original, recent_episodes=ctx.recent_episodes,
             conversation_id=conversation_id, allowed_spaces=spaces,
             now=memory_now)
+        if conversation_id.startswith("group:") and spaces:
+            from pathlib import Path
+            from whale_core.memory.group_archive import GroupArchive
+            from whale_core.memory.types import MemorySpaceType
+
+            if any(getattr(space, "type", None) is MemorySpaceType.GROUP_SPACE
+                   for space in spaces):
+                database = getattr(self.store, "path", "")
+                archive_path = (Path(database).with_name("group_archive.sqlite3")
+                                if database and database != ":memory:" else None)
+                if archive_path is not None and archive_path.exists():
+                    from whale_core.memory.group_directory import account_names, load_directory, name_hint
+                    from whale_core.memory.group_preferences import public_profile_context
+                    gid = conversation_id.split(":", 1)[1]
+                    roster = load_directory(archive_path, gid)
+                    if roster:
+                        info = name_hint(roster)
+                        principal = getattr(context, "principal", None)
+                        uid = str(getattr(principal, "principal_id", "")).rsplit(":", 1)[-1]
+                        display = account_names(roster).get(uid)
+                        if display:
+                            info += f" 当前发言者是{display}。"
+                        persona_text = (persona_text or "") + "\n" + info
+                    archive = GroupArchive(archive_path)
+                    try:
+                        quotes = archive.search(
+                            gid, original,
+                            now=memory_now, limit=4)
+                    finally:
+                        archive.close()
+                    memory_context = memory_context.with_group_archive_quotes(
+                        public_profile_context(self.store,gid,roster,original) + quotes)
         owner_principal = getattr(context, "principal", None)
         owner_id = (str(owner_principal.principal_id)
                     if getattr(owner_principal, "is_owner", False)
                     and not conversation_id.startswith("group:") else "")
         if owner_id:
+            from whale_core.memory.group_archive import owner_group_context
+            memory_context = memory_context.with_group_archive_quotes(
+                owner_group_context(self.store, context, conversation_id, original))
+            from whale_core.memory.recent_chat import recall_recent_owner_chat
+
+            memory_context = memory_context.with_recalled_chat(
+                recall_recent_owner_chat(
+                    self.store, original, conversation_id=conversation_id,
+                    space_ids=space_ids or (), now=memory_now))
             from whale_core.memory.emotion import EmotionMemory
             from whale_core.memory.person_model import PersonModel
             memory_context = memory_context.with_patterns(
@@ -366,7 +407,7 @@ class WhaleCompanion:
             if (spaces is None or target) and not paused and clean_response:
                 from whale_core.memory.transient import scrub_episode_summary
                 ep_summary = scrub_episode_summary(
-                    f"用户：{original[:500]}\nEnxi：{clean_response[:500]}")
+                    f"用户：{original[:500]}\n助手：{clean_response[:500]}")
                 if ep_summary:
                     ep_key = (f"ep:chat:{conversation_id}:{turn_key}" if turn_key
                               else f"ep:chat:{uuid4().hex}")

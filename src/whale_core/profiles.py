@@ -151,6 +151,7 @@ def assemble_runtime(
     env: Mapping[str, str] | None = None,
     config_dir: str | None = None,
     use_saved_config: bool = True,
+    pairing_bindings: Mapping[tuple[str, str], str] | None = None,
 ) -> RuntimeBundle:
     """按配置档装配运行时。profile 非法 → ValueError。"""
     if profile not in PROFILE_NAMES:
@@ -300,10 +301,14 @@ def assemble_runtime(
         return frozenset(out)
 
     _bindings = BindingStore(store, _spaces, owner_conversations=_owner_convs())
+    trusted_pairings = {
+        ("api", "console"): "owner", ("cli", "local"): "owner",
+        ("voice", "console"): "owner",
+    }
+    if pairing_bindings:
+        trusted_pairings.update(pairing_bindings)
     context_resolver = ConversationContextResolver(
-        pairing_lookup=pairing_lookup_from_mapping(
-            {("api", "console"): "owner", ("cli", "local"): "owner",
-             ("voice", "console"): "owner"}),
+        pairing_lookup=pairing_lookup_from_mapping(trusted_pairings),
         bindings=_bindings,
         grants=_auth,
         owner_id="owner",

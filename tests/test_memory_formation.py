@@ -24,6 +24,24 @@ class Extractor:
         return self.answer
 
 
+def test_owner_pen_name_can_be_formed_from_a_longer_message():
+    message = "这里叫我纸舟吧，其实我还有个笔名叫云格，第一次试写童话"
+    quote = "我还有个笔名叫云格"
+    assert eligible_message(message)
+    assert _quotes_from_model('{"quotes":["我还有个笔名叫云格"]}', message) == (quote,)
+    assert _slot_for_quote(quote) == "identity:pen_name"
+    store = InMemoryStore()
+    remember_episode(store, summary=f"用户：{message}\n助手：好",
+                     key="ep:pen-name", tags=("chat",), space_id="owner")
+    assert enqueue(store, owner_id="owner", space_id="owner",
+                   source_id="ep:pen-name", text=message)
+    assert run_pending(store, Extractor('{"quotes":["我还有个笔名叫云格"]}'))[
+        "written"] == 1
+    facts = store.list_by_kind(MemoryKind.PREFERENCE, space_ids=("owner",))
+    assert len(facts) == 1
+    assert facts[0].content["summary"] == f"用户自述：{quote}"
+
+
 def test_daily_habits_and_current_plans_are_distinct():
     assert eligible_message("我每周会跑步两次")
     assert _quotes_from_model('{"quotes":["我每周会跑步两次"]}',

@@ -16,6 +16,9 @@ from whale_core.api.studio.capabilities_rhythm import (
 )
 from whale_core.api.studio.conversations import _list_conversations
 from whale_core.api.studio.graph import _graph
+from whale_core.api.studio.group_digest import group_digest
+from whale_core.api.studio.memory_graph import graph as _memory_graph
+from whale_core.api.studio.memory_graph import evidence as _memory_evidence
 from whale_core.api.studio.members import (
     _member_consent_grant,
     _member_consent_list,
@@ -126,12 +129,18 @@ def _dispatch_studio(handler, method: str, parts: list[str]) -> None:
         _put_channel(handler, ctx, svc)
     elif rest == ["memory", "subjects"] and method == "GET":
         _memory_subjects(handler, ctx, svc)
+    elif rest == ["memory", "group-digest"] and method in ("GET", "POST"):
+        group_digest(handler, ctx, svc, update=method == "POST")
     elif rest == ["memory", "portrait"] and method == "GET":
         _portrait_list(handler, ctx, svc)
     elif rest == ["memory", "portrait"] and method == "POST":
         _portrait_change(handler, ctx, svc)
     elif rest == ["memory", "browse"] and method == "GET":
         _memory_browse(handler, ctx, svc)
+    elif rest == ["memory", "graph"] and method == "GET":
+        _memory_graph(handler, ctx, svc)
+    elif rest == ["memory", "evidence"] and method == "GET":
+        _memory_evidence(handler, ctx, svc)
     elif rest == ["memory", "history"] and method == "GET":
         _memory_history(handler, ctx, svc)
     elif rest == ["memory", "correct"] and method == "POST":
@@ -212,8 +221,8 @@ def _path_known(rest: list[str]) -> bool:
                 ["members", "memory"], ["members", "memory", "correct"],
                 ["members", "memory", "history"],
                 ["members", "memory", "delete"],
-                ["memory", "subjects"], ["memory", "browse"], ["memory", "history"],
-                ["initiative"], ["initiative", "global"],
+                ["memory", "subjects"], ["memory", "browse"], ["memory", "history"], ["memory", "graph"], ["memory", "evidence"],
+                ["memory", "group-digest"], ["initiative"], ["initiative", "global"],
                 ["initiative", "channel"],
                 ["memory", "correct"], ["memory", "expire"],
                 ["memory", "delete"], ["memory", "pause"]):

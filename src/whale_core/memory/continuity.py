@@ -51,8 +51,8 @@ def _summarize_persona(persona: PersonaContinuity | None) -> str:
         return ""
     taboos = "、".join(persona.taboos) if persona.taboos else "无"
     summary = (
-        f"{persona.persona_name}｜语气：{persona.tone}｜"
-        f"称呼用户：{persona.address_user_as}｜禁忌：{taboos}"
+        (f"{persona.persona_name}｜" if persona.persona_name else "")
+        + f"语气：{persona.tone}｜称呼用户：{persona.address_user_as}｜禁忌：{taboos}"
     )
     # Persona cards store their full expression contract in traits. Include it
     # in the context passed to text models; otherwise only name/tone/taboos

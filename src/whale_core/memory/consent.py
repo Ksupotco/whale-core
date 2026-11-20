@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 from whale_core.memory.types import MemorySpaceRef, MemorySpaceType
-from whale_core.memory.store import MemoryStore
+from whale_core.memory.store import MemoryKind, MemoryStore
 
 #: 授权默认有效期：180 天（0 = 不过期，需显式传入）。
 DEFAULT_CONSENT_TTL_S = 180 * 86400
@@ -142,6 +142,11 @@ class MemberConsentStore:
         self.store.put(f"{self._OPTOUT_PREFIX}{principal_id}",
                        {"opted_out": True, "at": _now().isoformat()})
         self.revoke_all(principal_id)
+        if principal_id.startswith(("anon:qq:", "paired:qq:")):
+            account = principal_id.split(":",2)[-1]
+            for record in self.store.list_by_kind(MemoryKind.GROUP_PROFILE):
+                if account in record.content.get("accounts", []):
+                    self.store.delete(record.key)
 
     def opt_in(self, principal_id: str) -> None:
         self.store.delete(f"{self._OPTOUT_PREFIX}{principal_id}")

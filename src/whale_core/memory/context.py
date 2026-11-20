@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 
 from whale_core.memory.transient import (
     is_transient_time_only, scrub_episode_summary, scrub_transient_time,
@@ -90,6 +91,8 @@ class MemoryContext:
     statuses: tuple[str, ...] = ()
     facts: tuple[str, ...] = ()
     related: tuple[str, ...] = ()
+    recalled_chat: tuple[str, ...] = ()
+    group_archive_quotes: tuple[str, ...] = ()
     recent: tuple[str, ...] = ()
     patterns: tuple[str, ...] = ()
     other: tuple[str, ...] = ()
@@ -99,7 +102,8 @@ class MemoryContext:
     def as_memories(self) -> tuple[str, ...]:
         """Compatibility view for existing reply models."""
         return (self.boundaries + self.access + self.constraints + self.statuses
-                + self.history + self.facts + self.related + self.recent
+                + self.history + self.recalled_chat + self.group_archive_quotes
+                + self.facts + self.related + self.recent
                 + self.patterns + self.other)
 
     def with_other(self, text: str) -> MemoryContext:
@@ -107,6 +111,12 @@ class MemoryContext:
 
     def with_patterns(self, patterns: tuple[str, ...]) -> MemoryContext:
         return replace(self, patterns=patterns) if patterns else self
+
+    def with_recalled_chat(self, quotes: tuple[str, ...]) -> MemoryContext:
+        return replace(self, recalled_chat=quotes) if quotes else self
+
+    def with_group_archive_quotes(self, quotes: tuple[str, ...]) -> MemoryContext:
+        return replace(self, group_archive_quotes=quotes) if quotes else self
 
 
 def build_memory_context(*, curator, query: str, recent_episodes,
@@ -240,8 +250,11 @@ def build_memory_context(*, curator, query: str, recent_episodes,
     seen = {_dedupe_key(text) for text in
             boundaries + access + constraints + statuses + facts + related}
     recent: list[str] = []
+    recent_cutoff = (now or datetime.now(timezone.utc)) - timedelta(hours=72)
     for record in recent_episodes:
         if "chat" not in record.tags:
+            continue
+        if record.created_at < recent_cutoff:
             continue
         if str(record.content.get("source_turn_id") or "") in retired_evidence_ids:
             continue

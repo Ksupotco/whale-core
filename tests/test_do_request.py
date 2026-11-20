@@ -23,7 +23,7 @@ def test_reject_chitchat_and_group_only_private():
     assert match_do_request("做梦吧") is None
     assert match_do_request("今天天气怎样") is None
     assert is_owner_private_conversation("private:u1")
-    assert not is_owner_private_conversation("group:1124744261")
+    assert not is_owner_private_conversation("group:10001")
 
 
 def test_try_owner_do_skips_group():
@@ -90,7 +90,7 @@ def test_qq_workflow_private_do_short_circuit():
     assert seen["n"] == 2
     # 群聊不短路
     event_g = OwnerEvent(
-        channel="qq", conversation="group:1124744261", owner_id="u_owner",
+        channel="qq", conversation="group:10001", owner_id="u_owner",
         sender_id="u_owner", message_id="m-do-2", text="做一张简单结果图发我")
     # 无编排器时会打 companion → BoomBrain；群应回落 companion，故预期炸
     try:

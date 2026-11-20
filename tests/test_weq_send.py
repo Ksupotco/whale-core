@@ -316,9 +316,9 @@ def _port_with_recorder(**kw):
 
 def test_send_group_text_with_at_element():
     """at_* 从来件元数据注入时，elements 前置 kind=at。"""
-    port, sent = _port_with_recorder(allowed_groups=("1124744261",))
+    port, sent = _port_with_recorder(allowed_groups=("10001",))
     assert port.send_group_text(
-        "1124744261", "你好", at_uid="u_abc", at_uin=10001, at_name="小明") is True
+        "10001", "你好", at_uid="u_abc", at_uin=10001, at_name="小明") is True
     els = sent[-1]["json"]["elements"]
     assert els[0]["kind"] == "at"
     assert els[0]["atTargetUid"] == "u_abc"
@@ -326,15 +326,15 @@ def test_send_group_text_with_at_element():
     assert els[0]["textContent"].startswith("@小明")
     assert els[1] == {"kind": "text", "textContent": "你好"}
     # 无 at_* 时仍是纯文本
-    assert port.send_group_text("1124744261", "普通") is True
+    assert port.send_group_text("10001", "普通") is True
     assert sent[-1]["json"]["elements"] == [{"kind": "text", "textContent": "普通"}]
 
 
 def test_send_group_text_only_allowed_groups():
-    port, sent = _port_with_recorder(allowed_groups=("1124744261",))
-    assert port.send_group_text("1124744261", "大家好") is True
+    port, sent = _port_with_recorder(allowed_groups=("10001",))
+    assert port.send_group_text("10001", "大家好") is True
     assert sent[-1]["json"]["peerType"] == "group"
-    assert sent[-1]["json"]["targetId"] == "1124744261"
+    assert sent[-1]["json"]["targetId"] == "10001"
     # 非白名单群：拒绝且不发请求
     n = len(sent)
     assert port.send_group_text("999", "hi") is False
@@ -344,7 +344,7 @@ def test_send_group_text_only_allowed_groups():
 
 def test_send_group_text_default_no_groups():
     port, sent = _port_with_recorder()
-    assert port.send_group_text("1124744261", "hi") is False
+    assert port.send_group_text("10001", "hi") is False
     assert sent == []
 
 
@@ -363,8 +363,8 @@ def test_group_sequence_missing_is_false():
     opener = FakeOpener([login_ok(), send_result(
         True, {"peerType": "group", "groupSequence": 0, "privateSequence": 0})])
     port = WeQWebSendPort(BASE, TOKEN, target_uid=UID, opener=opener,
-                          allowed_groups=("1124744261",))
-    assert port.send_group_text("1124744261", "hi") is False
+                          allowed_groups=("10001",))
+    assert port.send_group_text("10001", "hi") is False
     assert port.last_receipt["error"] == "groupSequence-missing"
 
 

@@ -10,9 +10,6 @@ from whale_core.cli.main import main
 from whale_core.core.lease import RuntimeBusy, RuntimeLease
 
 
-pytestmark = pytest.mark.skipif(os.name != "posix", reason="fcntl advisory locks require POSIX")
-
-
 def test_second_owner_refused_then_lock_released(tmp_path):
     with RuntimeLease(tmp_path) as first:
         with pytest.raises(RuntimeBusy):
@@ -20,7 +17,8 @@ def test_second_owner_refused_then_lock_released(tmp_path):
         assert first is not None
     with RuntimeLease(tmp_path):
         pass
-    assert (tmp_path / ".runtime.lock").stat().st_mode & 0o077 == 0
+    if os.name == "posix":
+        assert (tmp_path / ".runtime.lock").stat().st_mode & 0o077 == 0
 
 
 def test_cli_run_refuses_another_host(tmp_path, monkeypatch, capsys):

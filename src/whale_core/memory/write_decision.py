@@ -52,6 +52,9 @@ def decide_candidate(store, model, *, summary: str, source_text: str,
            for row in related):
         return WriteDecision("pending", reason="same_slot_conflict")
 
+    if model is None:
+        return WriteDecision("pending", reason="decision_unavailable")
+
     prompt = (
         "判断新事实与同一人的旧事实是否兼容。只输出 JSON，"
         '{"action":"compatible_add|update|preserve|revoke|pending|skip",'

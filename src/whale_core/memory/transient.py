@@ -95,7 +95,7 @@ def is_transient_time_only(text: str) -> bool:
 
 
 def scrub_episode_summary(summary: str) -> str:
-    """情节摘要（``用户：…\\nEnxi：…``）过滤：问时间的轮次整条丢弃（返回空串），
+    """情节摘要（``用户：…\\n助手：…``）过滤：问时间的轮次整条丢弃（返回空串），
     否则逐句剥报时；剥完两侧都空 → 空串（调用方跳过写入）。"""
     s = str(summary or "")
     m = re.match(r"^用户：(.*?)\n(\S{1,12})：(.*)$", s, re.S)

@@ -114,6 +114,8 @@ def compose_companion_system(
             ("当前行为约束", memory_context.constraints),
             ("已核验事实状态", memory_context.statuses),
             ("历史版本（仅供追溯，不作当前行动依据）", memory_context.history),
+            ("近三天私聊原话（仅回答回忆问题，不当作当前事实）", memory_context.recalled_chat),
+              ("授权群历史与画像依据（引用时区分原话、提取候选和推测；不当作当前事实，不编造未提取的画像）", memory_context.group_archive_quotes),
             ("相关事实", memory_context.facts),
             ("相关记忆", memory_context.related),
             ("本会话近期片段", memory_context.recent),

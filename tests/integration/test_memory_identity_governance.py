@@ -53,14 +53,14 @@ class StubBrain:
 
 def test_owner_registry_bind_resolve_unbind():
     reg = OwnerRegistry(InMemoryStore())
-    reg.bind("owner-1", "qq", "3563425362")
+    reg.bind("owner-1", "qq", "1000000020")
     reg.bind("owner-1", "web", "console-local")
-    assert reg.resolve("qq", "3563425362") == "owner-1"
+    assert reg.resolve("qq", "1000000020") == "owner-1"
     assert reg.resolve("web", "console-local") == "owner-1"
     assert reg.resolve("qq", "someone-else") is None
     assert len(reg.channels_for("owner-1")) == 2
-    assert reg.unbind("qq", "3563425362") is True
-    assert reg.resolve("qq", "3563425362") is None
+    assert reg.unbind("qq", "1000000020") is True
+    assert reg.resolve("qq", "1000000020") is None
 
 
 def test_owner_registry_no_implicit_rebind():

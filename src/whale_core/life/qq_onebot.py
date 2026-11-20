@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import hmac
+import hashlib
 import json
 import threading
 import urllib.error
@@ -175,22 +176,25 @@ class OneBotInboundBridge:
         return self.registry.accept(incoming)
 
     def handle_http_request(self, headers: Mapping[str, str], body: bytes | None, *,
-                            expected_token: str) -> tuple[int, OwnerEvent | None]:
+                            expected_token: str,
+                            signature_secret: str | None = None) -> tuple[int, OwnerEvent | None]:
         """HTTP POST 事件推送入口的共用逻辑：返回 (状态码, owner 事件或 None)。
 
-        401 token 不符（或未配置 token）；413 body 缺失/超限；400 body 不是 JSON 对象；
+        401 Bearer token 或可选 HTTP POST 签名不符；413 body 缺失/超限；
+        400 body 不是 JSON 对象；
         204 处理完成（无论是否产出 owner 事件）。鉴权通过后事件才按 authenticated=True
         进入配对；响应不回显 token 或正文。
         """
-        authorization: str | None = None
-        for key, value in headers.items():
-            if key.lower() == "authorization":
-                authorization = value
-                break
-        if not bearer_authenticated(authorization, expected_token):
-            return 401, None
         if body is None or len(body) > MAX_BODY_BYTES:
             return 413, None
+        normalized = {key.lower(): value for key, value in headers.items()}
+        if signature_secret is None:
+            authenticated = bearer_authenticated(normalized.get("authorization"), expected_token)
+        else:
+            digest = hmac.new(signature_secret.encode("utf-8"), body, hashlib.sha1).hexdigest()
+            authenticated = hmac.compare_digest(normalized.get("x-signature", ""), f"sha1={digest}")
+        if not authenticated:
+            return 401, None
         try:
             event = json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -203,18 +207,20 @@ class OneBotInboundBridge:
 class OneBotHttpListener:
     """接收协议端「HTTP POST 事件推送」的 stdlib HTTP 服务（NapCat 等）。
 
-    - 必须配置非空 token，否则拒绝启动（fail closed）；
+    - 必须配置非空 token，否则拒绝启动；可选签名密钥用于 OpenQQ HTTP POST；
     - 默认只绑 127.0.0.1；对外暴露必须经自建反代/隧道并另行评估风险；
     - 不记录请求内容（access log 静默），只回状态码；
     - start() 幂等；stop() 关闭套接字并等待线程退出。
     """
 
     def __init__(self, bridge: OneBotInboundBridge, *, expected_token: str,
-                 host: str = DEFAULT_ONEBOT_HOST, port: int = DEFAULT_ONEBOT_PORT) -> None:
+                 host: str = DEFAULT_ONEBOT_HOST, port: int = DEFAULT_ONEBOT_PORT,
+                 signature_secret: str | None = None) -> None:
         if not expected_token:
             raise ValueError("OneBotHttpListener requires a non-empty token (fail closed)")
         self.bridge = bridge
         self.expected_token = expected_token
+        self.signature_secret = signature_secret
         self.host = host
         self.requested_port = port
         self._server: ThreadingHTTPServer | None = None
@@ -228,7 +234,7 @@ class OneBotHttpListener:
     def start(self) -> None:
         if self._server is not None:
             return
-        bridge, token = self.bridge, self.expected_token
+        bridge, token, secret = self.bridge, self.expected_token, self.signature_secret
 
         class _Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
@@ -236,7 +242,8 @@ class OneBotHttpListener:
             def do_POST(self):
                 body = self._read_capped_body()
                 code, _ = bridge.handle_http_request(dict(self.headers), body,
-                                                     expected_token=token)
+                                                     expected_token=token,
+                                                     signature_secret=secret)
                 self.send_response(code)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
@@ -299,6 +306,9 @@ class OneBotOutboundPort:
         self.max_text_chars = max_text_chars
         self.last_receipt: dict | None = None
 
+    def message_segments(self, text: str) -> list[dict]:
+        return [{"type": "text", "data": {"text": text}}]
+
     def send(self, draft: ProactiveDraft) -> bool:
         if not self.enabled or draft.channel != self.channel:
             return False
@@ -308,7 +318,7 @@ class OneBotOutboundPort:
         try:
             receipt = self.transport.call("send_private_msg", {
                 "user_id": int(self.user_id),
-                "message": [{"type": "text", "data": {"text": text}}],
+                "message": self.message_segments(text),
             })
         except Exception:
             return False

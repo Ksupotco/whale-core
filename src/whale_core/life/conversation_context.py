@@ -64,7 +64,7 @@ class Principal:
     principal_id: str  # 稳定内部 ID；未认证时为 "anon:<channel>:<sender_id>"
     paired: bool  # 是否完成可信配对（OwnerRegistry 等）
     is_owner: bool  # 是否主人账号（仅可信配对证据得出）
-    evidence: str  # 证据来源描述，如 "owner_registry:qq:3899713055"；禁止记录秘密
+    evidence: str  # 证据来源描述，如 "owner_registry:qq:1000000040"；禁止记录秘密
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@
 也不授予任何权限。
 
 作用域（issue #54）：``scope`` 为空是全局状态（风格/兴趣）；传入会话 id
-（如 ``group:1124744261`` / ``private:<uin>``）得到该会话的私有状态——
+（如 ``group:10001`` / ``private:<uin>``）得到该会话的私有状态——
 未完话题按会话隔离，私聊话题不会串进无关群聊。
 """
 from __future__ import annotations

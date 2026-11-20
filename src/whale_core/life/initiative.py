@@ -27,7 +27,7 @@ class ProactiveDraft:
     expires_at: datetime | None = None
     # 主题标签（可选）：主动行为的主题去重键（roadmap P2-3），如 "weather:shanghai"。
     topic: str = ""
-    # 目标会话（可选）：如 "group:1124744261" / "private:<uid>"。
+    # 目标会话（可选）：如 "group:10001" / "private:<uid>"。
     # 2026-11-01 修复：群回复曾因此信息丢失而落进 owner 私聊。
     target_conversation: str = ""
 

@@ -31,11 +31,11 @@ from typing import Optional, Tuple
 # ---------------------------------------------------------------------------
 
 CHANNEL = "qq"
-GROUP_ID = "1124744261"
+GROUP_ID = "10001"
 GROUP = f"group:{GROUP_ID}"
 
 #: 机器人自身账号（ReplyTargetResolver / 时间线「@我」标注用）
-SELF_UIN = "3899713055"
+SELF_UIN = "1000000040"
 SELF_UID = "u_self_whale"
 
 A_UIN = "10001"  # 群友 A

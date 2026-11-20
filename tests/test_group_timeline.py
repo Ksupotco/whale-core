@@ -17,11 +17,11 @@ from whale_core.life.reply_target import ReplyTargetResolver
 from whale_core.memory.store import InMemoryStore
 from whale_core.memory.timeline import GroupTimelineStore
 
-SELF_UIN = "3899713055"
+SELF_UIN = "1000000040"
 SELF_UID = "u_selfwhale"
 
 
-def _event(msg_id, sender, text, *, chat="group", conv="1124744261",
+def _event(msg_id, sender, text, *, chat="group", conv="10001",
            elements=None, uid=""):
     return {"type": "message", "chatType": chat, "convId": conv,
             "msgId": msg_id, "msgSeq": "1", "senderUin": sender,
@@ -54,7 +54,7 @@ def test_parse_at_and_reply_metadata():
 def test_parse_group_allowlist_blocks_other_groups():
     ev = _event("m1", "10001", "hi", conv="999")
     inc = sse_message_to_incoming(ev, self_uin=SELF_UIN, accept_group=True,
-                                  group_allow=frozenset({"1124744261"}))
+                                  group_allow=frozenset({"10001"}))
     assert inc is None
 
 
@@ -124,11 +124,11 @@ def test_render_prefers_resolved_names():
     tl.append("group:1", message_id="aaaabbbb", sender_id="10001", text="在吗")
     tl.append("group:1", message_id="ccccdddd", sender_id="10002", text="在")
     tl.append("group:1", message_id="eeeeffff", sender_id="10003", text="来了")
-    tl.name_resolver = lambda conv, pairs: {"10001": "游荡者", "10002": "枕竹听"}
+    tl.name_resolver = lambda conv, pairs: {"10001": "游荡者", "10002": "测试成员B"}
     out = tl.render_for_model("group:1")
     assert "[bbbb|游荡者]" in out
-    assert "[dddd|在]" not in out  # 标签是昵称「在」？不——10002 的名是枕竹听
-    assert "[dddd|枕竹听]" in out
+    assert "[dddd|在]" not in out  # 标签是昵称「在」？不——10002 的名是测试成员B
+    assert "[dddd|测试成员B]" in out
     assert "[ffff|群友" in out  # 未解析者回退代号
 
 
@@ -189,7 +189,7 @@ def test_ab_hex_replay_attribution():
     store = InMemoryStore()
     tl = GroupTimelineStore(store)
     r = ReplyTargetResolver(self_uin=SELF_UIN, self_uid=SELF_UID)
-    conv = "group:1124744261"
+    conv = "group:10001"
 
     # [A] 求助
     tl.append(conv, message_id="m-a1", sender_id="10001",
@@ -312,7 +312,7 @@ def test_labels_do_not_leak_uin():
     """模型可见文本不含完整 QQ 号/UIN。"""
     store = InMemoryStore()
     tl = GroupTimelineStore(store)
-    tl.append("group:leak", message_id="m-1", sender_id="3563425362",
+    tl.append("group:leak", message_id="m-1", sender_id="1000000020",
               sender_uid="u_abcdefgh", text="hi")
     rendered = tl.render_for_model("group:leak", self_uid="u_self")
-    assert "3563425362" not in rendered and "u_abcdefgh" not in rendered
+    assert "1000000020" not in rendered and "u_abcdefgh" not in rendered
