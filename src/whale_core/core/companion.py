@@ -142,6 +142,9 @@ class WhaleCompanion:
         # issue #23：回复规划提示（ResponsePlanner 标记约定）。宿主按需设置
         # （如 QQ 会话），空 = 不提示（纯文本单条路径，行为不变）。
         self.planning_hint = ""
+        # 2026-11-19 用户令：视觉腿归属——图进模型只走视觉模型（宿主装配；
+        # 空 = 回落主模型，行为不变）。
+        self.vision_model = None
         # Optional owner-confirmed recommendation delivery callback.
         self.exploration_delivery = exploration_delivery
 
@@ -526,13 +529,16 @@ class WhaleCompanion:
                                    "metrics": metrics})
             except (TypeError, ValueError):
                 pass
-        response = self.model.reply(text, **kwargs)
+        # 视觉腿归属：直带图回合 → 视觉模型；defer 首轮文本 → 主模型
+        vision = self.vision_model or self.model
+        first_brain = vision if (images and not defer_images) else self.model
+        response = first_brain.reply(text, **kwargs)
         if deferred:
             from whale_core.life.image_caption import ESCALATE_MARK
             if ESCALATE_MARK in (response or ""):
-                # 模型自判文字描述不够 → 升级看原图（每轮至多一次）
+                # 模型自判文字描述不够 → 升级看原图（每轮至多一次，走视觉模型）
                 kwargs["images"] = deferred
-                response = self.model.reply(text, **kwargs)
+                response = vision.reply(text, **kwargs)
             response = (response or "").replace(ESCALATE_MARK, "").strip()
         if on_phase is not None:
             on_phase("compose")

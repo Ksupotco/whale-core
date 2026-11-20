@@ -95,6 +95,27 @@ def test_no_defer_images_pass_through():
     assert brain.calls[0]["images"] == [(PNG, "image/png")]
 
 
+def test_vision_model_owns_image_calls():
+    """视觉腿归属（2026-11-19 用户令）：直带图与升级重答都走 vision_model。"""
+    store = InMemoryStore()
+    main = _DeferBrain(out_no_img="没图")
+    vision = _DeferBrain()
+    comp = WhaleCompanion(store, main)
+    comp.vision_model = vision
+    # 直带图回合：走视觉脑
+    comp.chat("图", conversation_id="v1",
+              images=[(PNG, "image/png")], defer_images=False)
+    assert vision.calls and vision.calls[0]["images"] == [(PNG, "image/png")]
+    assert not main.calls
+    # defer 升级：首轮主脑（无图）→ 标记 → 视觉脑带图
+    comp2 = WhaleCompanion(store, _DeferBrain())  # 首轮无图回标记
+    comp2.vision_model = vision
+    out = comp2.chat("图", conversation_id="v2",
+                     images=[(PNG, "image/png")], defer_images=True)
+    assert "看到了" in out
+    assert vision.calls[-1]["images"] == [(PNG, "image/png")]
+
+
 # ---------- workflow caption 上下文 ----------
 
 def test_caption_context_defers_when_all_captioned():

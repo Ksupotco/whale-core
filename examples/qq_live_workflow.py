@@ -105,13 +105,30 @@ class StubBrain:
 
 
 def build_brain():
+    """直接回复脑（2026-11-19 用户令：WHALE_REPLY_* 切换，缺省回落 DEEPSEEK_*）。
+    回复模型走 agentscope 供应商 deepseek-v4-pro-0813（无视觉——视觉腿归
+    build_vision_brain）。"""
+    model = (os.environ.get("WHALE_REPLY_MODEL")
+             or os.environ.get("DEEPSEEK_MODEL") or "deepseek-chat").strip()
+    base = (os.environ.get("WHALE_REPLY_BASE_URL")
+            or os.environ.get("QQ_INTENT_BASE_URL")
+            or os.environ.get("DEEPSEEK_BASE_URL") or "").strip() or None
+    key = (os.environ.get("WHALE_REPLY_API_KEY")
+           or os.environ.get("QQ_INTENT_API_KEY")
+           or os.environ.get("DEEPSEEK_API_KEY") or "").strip() or None
+    if key:
+        from whale_core.core.deepseek import DeepSeekCompanion
+        print("[brain] 回复脑（base_url=%s, model=%s）" % (base, model))
+        return DeepSeekCompanion(model=model, base_url=base, api_key=key)
+    print("[brain] [!] stub 脑（无可用 key；只验证管道，不产生真实回复）")
+    return StubBrain()
+
+
+def build_vision_brain():
+    """视觉脑（图进模型的唯一腿）：DEEPSEEK_* 不变（deepseek-flash 实测可读图）。"""
     if os.environ.get("DEEPSEEK_API_KEY"):
         from whale_core.core.deepseek import DeepSeekCompanion
-        print("[brain] DeepSeek（base_url=%s, model=%s）" % (
-            os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-            os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")))
         return DeepSeekCompanion()
-    print("[brain] [!] stub 脑（DEEPSEEK_API_KEY 未配置；只验证管道，不产生真实回复）")
     return StubBrain()
 
 
@@ -483,6 +500,7 @@ def cmd_run(args) -> int:
                                  auth_service=auth_service,
                                  context_resolver=context_resolver,
                                  stranger_daily_limit=_stranger_limit)
+    workflow.companion.vision_model = build_vision_brain()
 
     def _send_audio_artifacts(audio_ids, *, peer_type: str = "",
                               target: str = "") -> int:
@@ -1396,7 +1414,7 @@ def cmd_run(args) -> int:
 
                     def _cap_bg(_d=data, _m=mime):
                         try:
-                            _cap = caption_for(store, build_brain(), _d, _m)
+                            _cap = caption_for(store, build_vision_brain(), _d, _m)
                             if _cap:
                                 import hashlib as _hl
                                 print(f"  [图片成文] {_hl.sha256(bytes(_d)).hexdigest()[:8]} "
