@@ -506,6 +506,10 @@ _SENDTO_PREFIXES = ("send_to:", "sendto:", "发给:")
 
 #: send_to 目标形态：owner / group:<群号> / private:<uid>（uid 为 u_ 前缀）
 _SENDTO_TARGET_RE = re.compile(r"^(owner|group:\d{4,20}|private:u_[A-Za-z0-9_-]{2,62})$")
+#: 解析「目标:内容」：目标按形态锚定（群号/uid 里还有冒号，不能按首个冒号切）
+_SENDTO_PARSE_RE = re.compile(
+    r"^(owner|group:\d{4,20}|private:u_[A-Za-z0-9_-]{2,62})\s*[:：]\s*(.+)$",
+    re.S)
 
 _TIME_KEYS = ("几点", "现在时间", "what time")
 _SCHEDULE_KEYS = ("日程", "安排", "行程", "日历")
@@ -526,12 +530,12 @@ def _classify(text: str) -> tuple[str, object]:
     for prefix in _SENDTO_PREFIXES:
         if lower.startswith(prefix) or stripped.startswith(prefix):
             rest = stripped[len(prefix):].lstrip()
-            target, sep, content = rest.partition(":")
-            target = target.strip()
-            content = content.strip()
-            if target and sep and content:
-                return ("send", (target, content))
-            return ("chat", stripped)
+            m = _SENDTO_PARSE_RE.match(rest)
+            if m:
+                return ("send", (m.group(1), m.group(2).strip()))
+            # 形态不符仍进 send 门：由门给诚实报错，不沉成聊天
+            head, _sep, content = rest.partition(":")
+            return ("send", (head.strip(), content.strip()))
     for prefix in _WRITE_PREFIXES:
         if lower.startswith(prefix) or stripped.startswith(prefix):
             rest = stripped[len(prefix):].lstrip()
