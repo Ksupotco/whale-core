@@ -1396,7 +1396,11 @@ def cmd_run(args) -> int:
 
                     def _cap_bg(_d=data, _m=mime):
                         try:
-                            caption_for(store, build_brain(), _d, _m)
+                            _cap = caption_for(store, build_brain(), _d, _m)
+                            if _cap:
+                                import hashlib as _hl
+                                print(f"  [图片成文] {_hl.sha256(bytes(_d)).hexdigest()[:8]} "
+                                      f"描述已就绪（{len(_cap)} 字）", flush=True)
                         except Exception:
                             pass
                     _th.Thread(target=_cap_bg, daemon=True).start()
