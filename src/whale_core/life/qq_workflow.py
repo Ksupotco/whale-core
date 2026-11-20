@@ -319,6 +319,27 @@ class QqInboundWorkflow:
                 best = (at, k.split(":", 1)[1])
         return self._read_msgimg(best[1]) if best else ()
 
+    def _caption_context(self, images: tuple) -> tuple[str, bool]:
+        """caption-first（2026-11-19 Tob 定）：全部图都有缓存文字描述 →
+        描述进文本 + defer（原图暂缓，模型 [[看原图]] 才升级）；任一图无描述
+        （生成中/失败）→ 原图照常进上下文（不降可见性）。"""
+        if not images:
+            return "", False
+        import os as _os
+        if (_os.environ.get("WHALE_IMAGE_CAPTION", "1") or "1").strip() == "0":
+            return "", False
+        from whale_core.life.image_caption import caption_key, captions_note
+        caps: list[str] = []
+        for data, _mime in images:
+            try:
+                c = self.store.get(caption_key(bytes(data)))
+            except Exception:
+                c = None
+            caps.append(c if isinstance(c, str) else "")
+        if not all(str(c).strip() for c in caps):
+            return "", False
+        return captions_note(caps), True
+
     def _recent_peer_image(self, event, *, window_s: float = 180.0) -> tuple:
         """无引用时的看图兜底：同一发送者 3 分钟内的上一条带图消息
         （「看看这个」式指代不带引用）。当前消息自带图则不补。"""
@@ -334,8 +355,7 @@ class QqInboundWorkflow:
         mids: list[str] = []
         if conv.startswith("group:"):
             from whale_core.memory.timeline import GroupTimelineStore
-            for e in reversed(GroupTimelineStore(self.store).recent(
-            conv, limit=50)):  # 话密顶出浅窗实证：扫深 50（时间窗才是真边界）
+            for e in reversed(GroupTimelineStore(self.store).recent(conv, limit=8)):
                 if str(e.get("sender_id") or "") != sender:
                     continue
                 try:
@@ -375,8 +395,7 @@ class QqInboundWorkflow:
             try:
                 from whale_core.memory.timeline import GroupTimelineStore
                 cands: list[str] = []
-                for e in GroupTimelineStore(self.store).recent(
-            conv, limit=50):  # 话密顶出浅窗实证：扫深 50（时间窗才是真边界）
+                for e in GroupTimelineStore(self.store).recent(conv, limit=8):
                     if not isinstance(e, dict):
                         continue
                     mid2 = str(e.get("message_id") or "")
@@ -645,9 +664,14 @@ class QqInboundWorkflow:
                 if note:
                     text = text + "\n" + note
                 images = tuple(images) + tuple(qimages)
+                # caption-first：全有描述 → 描述进文本 + 原图暂缓（[[看原图]] 升级）
+                cap_note, defer = self._caption_context(images)
+                if cap_note:
+                    text = text + "\n" + cap_note
                 envelope = InputEnvelope(
                     conversation_id=event.conversation, text=text, source="qq:owner",
                     channel="qq", owner_id=event.owner_id, images=images,
+                    defer_images=defer,
                     sender_id=event.sender_id)
                 if self._completion_sender is not None and self._parallel_enabled():
                     # 2026-11-06：DS 第一条秒回；意图后台判定，需要工具时补发第二条。
@@ -1004,9 +1028,13 @@ class QqInboundWorkflow:
         if note:
             text = text + "\n" + note
         images = tuple(images) + tuple(qimages)
+        # caption-first（同 owner 路径）
+        cap_note, defer = self._caption_context(images)
+        if cap_note:
+            text = text + "\n" + cap_note
         envelope = InputEnvelope(
             conversation_id=event.conversation, text=text, source="qq:stranger",
-            channel=channel, sender_id=sender, images=images)
+            channel=channel, sender_id=sender, images=images, defer_images=defer)
         # 2026-11-01 修复：陌生人/群成员路径同样走两段式——慢任务（生图实测
         # 60-180s）先 ack 后补发；此前同步路径 60s 即 tool-timeout 全灭。
         if self._completion_sender is not None and self._parallel_enabled():

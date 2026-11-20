@@ -56,6 +56,9 @@ class InputEnvelope:
     owner_id: str = ""
     images: tuple = ()
     request_id: str = ""
+    # caption-first（2026-11-19）：True = 图片先不进模型（文本里已有描述），
+    # 模型回 [[看原图]] 标记才升级带图重答（每轮至多一次）。
+    defer_images: bool = False
     # S1（Whale Studio）：真实发送者与服务端授权上下文。
     # sender_id 由可信渠道适配器填写；context 只接受服务端解析产物，
     # 编排器注入 resolver 后会自行重解析并覆盖任何调用方提供的值。

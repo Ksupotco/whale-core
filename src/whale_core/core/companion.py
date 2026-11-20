@@ -211,7 +211,8 @@ class WhaleCompanion:
              episodic: bool = True, context=None, allowed_spaces=None,
              write_space: str | None = None, location: str | None = None,
              on_delta=None, should_stop=None, metrics=None, on_phase=None,
-             followup: bool = False, persona_id: str | None = None) -> str:
+             followup: bool = False, persona_id: str | None = None,
+             defer_images: bool = False) -> str:
         # 不把整轮 LLM 包进 conversation_lock：同会话重叠请求要能在 A 还在生成时
         # 读到 A 已落盘的用户原话。历史读写各自短临界区（见 _chat）。
         return self._chat(text, conversation_id=conversation_id, user_text=user_text,
@@ -221,14 +222,15 @@ class WhaleCompanion:
                           write_space=write_space, location=location,
                           on_delta=on_delta,
                           should_stop=should_stop, metrics=metrics,
-                          on_phase=on_phase)
+                          on_phase=on_phase, defer_images=defer_images)
 
     def _chat(self, text: str, *, conversation_id: str = "", user_text: str | None = None,
               images: Sequence[bytes] = (), turn_key: str = "",
               episodic: bool = True, context=None, allowed_spaces=None,
               write_space: str | None = None, location: str | None = None,
               on_delta=None, should_stop=None, metrics=None, on_phase=None,
-              followup: bool = False, persona_id: str | None = None) -> str:
+              followup: bool = False, persona_id: str | None = None,
+              defer_images: bool = False) -> str:
         original = text if user_text is None else user_text
         # issue #45：真实阶段反馈（接收→上下文/记忆构建→模型请求→整理）；
         # 无回调时零开销。阶段与耗时全部实测，不伪造进度百分比。
@@ -496,7 +498,10 @@ class WhaleCompanion:
                     if not followup:
                         append_user_message(self.store, conversation_id, original)
         kwargs = {"persona": persona_text, "memories": memories, "history": history}
-        if images:
+        # caption-first（2026-11-19）：defer_images 时首轮不带图（文本已有描述），
+        # 模型回 [[看原图]] 才带图重答一次；标记不进最终回复。
+        deferred = tuple(images) if defer_images else ()
+        if images and not defer_images:
             kwargs["images"] = images
         if location is not None:
             # DeepSeekCompanion 等支持 location= 时注入 system；旧 FakeBrain 忽略未知参数会炸，
@@ -522,6 +527,13 @@ class WhaleCompanion:
             except (TypeError, ValueError):
                 pass
         response = self.model.reply(text, **kwargs)
+        if deferred:
+            from whale_core.life.image_caption import ESCALATE_MARK
+            if ESCALATE_MARK in (response or ""):
+                # 模型自判文字描述不够 → 升级看原图（每轮至多一次）
+                kwargs["images"] = deferred
+                response = self.model.reply(text, **kwargs)
+            response = (response or "").replace(ESCALATE_MARK, "").strip()
         if on_phase is not None:
             on_phase("compose")
         # 2026-11-01 记忆污染修复：情节记忆与会话历史只落**净文本**

@@ -447,7 +447,8 @@ class TurnOrchestrationMixin:
             user_text=text if note else None, location=loc,
             images=env.images, context=env.context,
             on_delta=env.on_delta, should_stop=env.should_stop,
-            metrics=env.metrics, on_phase=env.on_phase)
+            metrics=env.metrics, on_phase=env.on_phase,
+            defer_images=getattr(env, "defer_images", False))
 
     def _mark_followup(self, task_id: str, first: str) -> None:
         """台账标记：本任务的结局是「第一条之后的跟进」，组装时带上第一条原文。"""
@@ -577,7 +578,8 @@ class TurnOrchestrationMixin:
                               on_delta=env.on_delta,
                               should_stop=env.should_stop,
                               metrics=env.metrics,
-                              on_phase=env.on_phase)
+                              on_phase=env.on_phase,
+                              defer_images=getattr(env, "defer_images", False))
             reply, file_ids = self._attach_long_file(reply, plan)
             return TurnResult(
                 reply=reply,
