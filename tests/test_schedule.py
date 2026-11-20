@@ -254,3 +254,23 @@ def test_http_source_context(tmp_path):
         assert s == 200 and len(body["context"]) == 3
         assert body["context"][1]["messageId"] == "m1"
         assert body["context"][1]["text"] == "消息1"
+
+
+def test_loop_notify_routes_through_agent_budget_ledger():
+    """约束②：loop 走 agent.notify 公开口——预算+台账不旁路。"""
+    from whale_core.api.glasses_agent import GlassesAgent, NotifyBudget, NotifyUserGateway
+    sent = []
+    records = []
+    gw = NotifyUserGateway(
+        deliver=lambda t: (sent.append(t), (True, "ok"))[1],
+        qq=None, phone=None)
+    store = InMemoryStore()
+    agent = GlassesAgent(store=store, ledger=lambda r: records.append(r),
+                         workspace="/tmp/x", notify_gateway=gw,
+                         notify_budget=NotifyBudget(store, per_turn=3, per_hour=1, per_day=30))
+    out = agent.notify("第一条", channel="auto", session_id="schedule-loop")
+    assert out["actions"][0]["status"] == "ok" and sent == ["第一条"]
+    out2 = agent.notify("第二条", channel="auto", session_id="schedule-loop")
+    assert out2["actions"][0]["status"] == "fail"  # 超 hour 桶被拦
+    assert len(sent) == 1
+    assert records[-1]["verdict"] == "fail"  # 台账有拦截记录

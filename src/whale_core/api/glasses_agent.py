@@ -752,6 +752,14 @@ class GlassesAgent:
             actions=[{"kind": kind, "summary": _c200(summary),
                       "status": "held", "output_digest": _c200(note)}])
 
+    # -- 供 loop 类宿主走的公开通知口（频控+台账不旁路） -------------------------
+    def notify(self, text: str, *, channel: str = "auto", urgency: str = "normal",
+               session_id: str = "loop") -> dict:
+        """外部循环（日程提醒等）的通知入口：走同一预算+台账+网关，
+        不绕过频控（约束②）。"""
+        return self._notify_turn(channel, urgency, text, session_id,
+                                 self.clock())
+
     # -- 回合步数预算 ------------------------------------------------------------
     def _steps_over(self, steps: int, turn_class: str) -> str | None:
         limit = self.max_steps if turn_class == "interactive" else self.bg_max_steps

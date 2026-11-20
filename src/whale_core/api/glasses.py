@@ -1873,8 +1873,10 @@ def main(argv=None) -> int:
             from whale_core.api.glasses_context import request_context_hint
 
             def _notify(text, channel):
-                return delegates["agent"].notify_gateway.send(
-                    text=text, channel=channel, urgency="normal")
+                # 走 agent 公开通知口：频控+台账不旁路（约束②）
+                return delegates["agent"].notify(
+                    text, channel=channel, urgency="normal",
+                    session_id="schedule-loop")
 
             schedule_loop = ScheduleReminderLoop(
                 store=delegates["store"],
