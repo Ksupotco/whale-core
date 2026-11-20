@@ -105,30 +105,13 @@ class StubBrain:
 
 
 def build_brain():
-    """直接回复脑（2026-11-19 用户令：WHALE_REPLY_* 切换，缺省回落 DEEPSEEK_*）。
-    回复模型走 agentscope 供应商 deepseek-v4-pro-0813（无视觉——视觉腿归
-    build_vision_brain）。"""
-    model = (os.environ.get("WHALE_REPLY_MODEL")
-             or os.environ.get("DEEPSEEK_MODEL") or "deepseek-chat").strip()
-    base = (os.environ.get("WHALE_REPLY_BASE_URL")
-            or os.environ.get("QQ_INTENT_BASE_URL")
-            or os.environ.get("DEEPSEEK_BASE_URL") or "").strip() or None
-    key = (os.environ.get("WHALE_REPLY_API_KEY")
-           or os.environ.get("QQ_INTENT_API_KEY")
-           or os.environ.get("DEEPSEEK_API_KEY") or "").strip() or None
-    if key:
-        from whale_core.core.deepseek import DeepSeekCompanion
-        print("[brain] 回复脑（base_url=%s, model=%s）" % (base, model))
-        return DeepSeekCompanion(model=model, base_url=base, api_key=key)
-    print("[brain] [!] stub 脑（无可用 key；只验证管道，不产生真实回复）")
-    return StubBrain()
-
-
-def build_vision_brain():
-    """视觉脑（图进模型的唯一腿）：DEEPSEEK_* 不变（deepseek-flash 实测可读图）。"""
     if os.environ.get("DEEPSEEK_API_KEY"):
         from whale_core.core.deepseek import DeepSeekCompanion
+        print("[brain] DeepSeek（base_url=%s, model=%s）" % (
+            os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+            os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")))
         return DeepSeekCompanion()
+    print("[brain] [!] stub 脑（DEEPSEEK_API_KEY 未配置；只验证管道，不产生真实回复）")
     return StubBrain()
 
 
@@ -500,7 +483,6 @@ def cmd_run(args) -> int:
                                  auth_service=auth_service,
                                  context_resolver=context_resolver,
                                  stranger_daily_limit=_stranger_limit)
-    workflow.companion.vision_model = build_vision_brain()
 
     def _send_audio_artifacts(audio_ids, *, peer_type: str = "",
                               target: str = "") -> int:
@@ -1196,49 +1178,39 @@ def cmd_run(args) -> int:
         """模型提了反应图意图（[[表情:标签]]）时素材层选图直发（issue #57）。
 
         无素材/频控中/近期重复/读取或发送失败 → 安静退回纯文字
-        （文字气泡已发，不补发不报错）。选图/读取/失败语义在
-        life.reaction_media.send_reaction_for_plan（单测覆盖），
-        本闭包只保留通道细节（send_image_to 定向 + 群时间线自记）。
+        （文字气泡已发，不补发不报错）。
         """
-        if not live_auto:
+        tag = getattr(plan, "reaction_tag", "") or ""
+        if not tag or not live_auto:
             return
-        from whale_core.life.reaction_media import send_reaction_for_plan
-
-        def _send(data: bytes, media) -> bool:
+        try:
+            media = reaction_store.pick(
+                (tag,), persona_id=_reaction_persona_id(conversation),
+                conversation_id=conversation)
+            if media is None:
+                return
+            blob = cap.artifacts.read(media.artifact_id) \
+                if cap.artifacts is not None else None
+            if not blob:
+                return
+            artifact, data = blob
+            ext = {"image/png": ".png", "image/jpeg": ".jpg",
+                   "image/webp": ".webp", "image/gif": ".gif"}.get(
+                getattr(artifact, "content_type", ""), ".png")
             peer_type = "group" if conversation.startswith("group:") else "c2c"
-            target = (conversation.split(":", 1)[1]
-                      if ":" in conversation else "")
-            if not hasattr(send_port, "send_image_to"):
-                return False
-            ext = ".png"
-            try:
-                if cap.artifacts is not None:
-                    rec = cap.artifacts.get(media.artifact_id)
-                    ext = {"image/png": ".png", "image/jpeg": ".jpg",
-                           "image/webp": ".webp", "image/gif": ".gif"}.get(
-                        getattr(rec, "content_type", ""), ".png")
-            except Exception:
-                pass
-            return bool(send_port.send_image_to(
+            target = conversation.split(":", 1)[1] if ":" in conversation else ""
+            ok = send_port.send_image_to(
                 peer_type, target, data,
-                filename=f"reaction-{media.media_id}{ext}"))
-
-        outcome = send_reaction_for_plan(
-            reaction_store, plan, conversation_id=conversation,
-            persona_id=_reaction_persona_id(conversation),
-            send_image=_send)
-        if outcome == "sent":
-            print(f"  [表情] 「{getattr(plan, 'reaction_tag', '')}」已发")
-            if conversation.startswith("group:"):
-                try:
-                    timeline.append(
-                        conversation,
-                        message_id=f"selfreaction:{uuid.uuid4().hex[:8]}",
-                        sender_id=self_uin, text="[图片]", is_self=True)
-                except Exception:
-                    pass
-        elif outcome != "skipped:no-tag":
-            print(f"  [表情] 「{getattr(plan, 'reaction_tag', '')}」{outcome}")
+                filename=f"reaction-{media.media_id}{ext}") \
+                if hasattr(send_port, "send_image_to") else False
+            print(f"  [表情] 「{tag}」→ 素材 {media.media_id} "
+                  f"{'已发' if ok else '发送失败'}")
+            if ok and peer_type == "group":
+                timeline.append(conversation,
+                                message_id=f"selfreaction:{uuid.uuid4().hex[:8]}",
+                                sender_id=self_uin, text="[图片]", is_self=True)
+        except Exception as exc:
+            print(f"  [表情] fail-soft：{type(exc).__name__}")
 
     # 2026-11-03 owner 授权：群里看到的表情包自动收编为自己的
     # （入反应素材库 + QQ 收藏）。私聊图片绝不自动入库（#57 纪律保留）。
@@ -1414,11 +1386,7 @@ def cmd_run(args) -> int:
 
                     def _cap_bg(_d=data, _m=mime):
                         try:
-                            _cap = caption_for(store, build_vision_brain(), _d, _m)
-                            if _cap:
-                                import hashlib as _hl
-                                print(f"  [图片成文] {_hl.sha256(bytes(_d)).hexdigest()[:8]} "
-                                      f"描述已就绪（{len(_cap)} 字）", flush=True)
+                            caption_for(store, build_brain(), _d, _m)
                         except Exception:
                             pass
                     _th.Thread(target=_cap_bg, daemon=True).start()
@@ -1478,6 +1446,21 @@ def cmd_run(args) -> int:
         event = _dc.replace(last, text=batch.text,
                             message_id=batch.message_ids[-1],
                             attachments=tuple(merged_attach))
+        # 日程提取（2026-11-19）：owner 本人的话才进 owner 池（约束⑥）；
+        # 确定性规则提取，不建候选零成本，异常 fail-soft。
+        try:
+            if owner_qq and str(batch.sender_id) == owner_qq:
+                from whale_core.life.schedule import (
+                    add_candidate, extract_schedule_candidate)
+                cand = extract_schedule_candidate(
+                    batch.text or "",
+                    source={"conversation": str(getattr(event, "conversation", "") or ""),
+                            "messageId": str(getattr(event, "message_id", "") or "")})
+                if cand is not None:
+                    add_candidate(store, cand)
+                    print(f"  [日程候选] {cand['date']} {cand['title'][:24]} 已入候选池")
+        except Exception:
+            pass
         if batch.message_ids and len(batch.message_ids) > 1:
             print(f"  [合批] {len(batch.message_ids)} 条合并为一回合 ← {batch.sender_id}")
         # 补发顺序门闩：主流程在途期间，两段式补发等待（见 _await_turn）
@@ -1987,17 +1970,24 @@ def cmd_run(args) -> int:
             "\n当前已挂载工具：" + "、".join(_cap_names) + "。")
     # issue #57：反应图能力说明只在素材库非空时出现（每轮动态求值；
     # 模型只提语义标签，选图/频控由素材层兜底，发不出就纯文字）。
-    # 文案与标签池逻辑在 reaction_media.planning_hint_with_reactions
-    #（单测覆盖；2026-11-18 prompts 线定稿的措辞逐字保留）。
-    from whale_core.life.reaction_media import planning_hint_with_reactions
     _base_planning_hint = workflow.companion.planning_hint
 
     def _dynamic_planning_hint():
+        hint = _base_planning_hint
         try:
-            return planning_hint_with_reactions(
-                _base_planning_hint, reaction_store, max_tags=12)
+            items = reaction_store.list()
+            if items:
+                # 带上素材库的真实标签——模型写不存在的标签=选不到图
+                tag_pool = sorted({t for m in items for t in m.tags})[:12]
+                # 2026-11-18：只留机制说明（标签池是硬约束）；「别每轮都用」
+                # 式频率规定已删——表达节奏由人格自然驱动。
+                hint += ("\n想在文字之外配一张应景的表情图时，可以在回复结尾写 "
+                         "[[表情:标签]]（只能从现有素材标签里挑："
+                         + "/".join(tag_pool) +
+                         "）；有匹配素材才会真的发出去。")
         except Exception:
-            return _base_planning_hint
+            pass
+        return hint
 
     workflow.companion.planning_hint = _dynamic_planning_hint
     # 2026-11-10：重模型陪伴镜像人格关键接线（对象早已挂进编排器，

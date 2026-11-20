@@ -184,8 +184,38 @@ def render_context(facts: dict | None, *, now: datetime | None = None) -> str:
     return "当轮手机事实资料：\n" + "\n".join(lines)[:3000]
 
 
+def _merge_schedule_items(snapshot: dict, store) -> dict:
+    """日程正式条目合并进日历视图（约束①：快照语义不动；④：schedule 命名空间
+    独立读取，不回写快照）。items 以事件形态并入对应日期（title/time 映射到
+    日历事件五键的子集：title/start）。"""
+    try:
+        from whale_core.life.schedule import list_items
+        today = datetime.now(SHANGHAI).date()
+        items = list_items(store, from_date=today.isoformat(),
+                           to_date=(today + timedelta(days=7)).isoformat())
+    except Exception:
+        return snapshot
+    if not items:
+        return snapshot
+    merged = dict(snapshot)
+    calendar = dict(merged.get("calendar") or {})
+    for it in items:
+        day = str(it.get("date") or "")
+        if not day:
+            continue
+        if day in calendar and calendar[day] is None:
+            continue  # null=未读语义不覆盖（保持快照语义）
+        cur = list(calendar.get(day) or [])
+        cur.append({"title": str(it.get("title") or "")[:120],
+                    "start": str(it.get("time") or "")})
+        calendar[day] = cur
+    merged["calendar"] = calendar
+    return merged
+
+
 def request_context_hint(store) -> str:
     snapshot = store.get(SNAPSHOT_KEY) or {}
+    snapshot = _merge_schedule_items(snapshot, store)
     current = REQUEST_FACTS.get() or {}
     # Explicit current facts override synchronized facts, never modify the snapshot.
     merged = dict(snapshot)

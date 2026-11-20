@@ -1117,6 +1117,124 @@ def make_handler(delegates):
                 self.close_connection = True
                 return None
 
+        def _schedule_candidate_action(self):
+            """POST /v1/schedule/candidates —— body {id, action: add|reject}。"""
+            body = self._read_json()
+            if body is None:
+                _json_response(self, 400, {"error": "invalid json body"})
+                return
+            from whale_core.life.schedule import approve_candidate, reject_candidate
+            cand_id = str(body.get("id") or "").strip()
+            action = str(body.get("action") or "").strip()
+            if not cand_id or action not in ("add", "reject"):
+                _json_response(self, 400, {"error": "id + action(add|reject) required"})
+                return
+            store = delegates.get("store")
+            if action == "add":
+                item = approve_candidate(store, cand_id)
+                if item is None:
+                    _json_response(self, 404, {"error": "candidate not found or not pending"})
+                    return
+                _json_response(self, 200, {"ok": True, "item": item})
+                return
+            ok = reject_candidate(store, cand_id)
+            if not ok:
+                _json_response(self, 404, {"error": "candidate not found or not pending"})
+                return
+            _json_response(self, 200, {"ok": True})
+
+        def _schedule_item_create(self):
+            """POST /v1/schedule/items —— 手动建正式日程 {title, date, time?}。"""
+            body = self._read_json()
+            if body is None:
+                _json_response(self, 400, {"error": "invalid json body"})
+                return
+            from whale_core.life.schedule import add_item
+            title = str(body.get("title") or "").strip()
+            date = str(body.get("date") or "").strip()
+            time_ = str(body.get("time") or "").strip()
+            if not title or not date:
+                _json_response(self, 400, {"error": "title and date required"})
+                return
+            try:
+                item = add_item(delegates.get("store"), title=title, date=date,
+                                time_=time_)
+            except ValueError:
+                _json_response(self, 400, {"error": "invalid date"})
+                return
+            _json_response(self, 200, {"ok": True, "item": item})
+
+        def _schedule_read(self, kind: str):
+            """GET /v1/schedule/candidates|list|source——Bearer phone 鉴权。"""
+            if not self._authorized():
+                self.close_connection = True
+                _json_response(self, 401, {"error": "unauthorized"})
+                return
+            from urllib.parse import urlparse, parse_qs
+            from whale_core.life.schedule import list_candidates, list_items
+            store = delegates.get("store")
+            if kind == "candidates":
+                _json_response(self, 200, {"candidates": list_candidates(store)})
+                return
+            if kind == "list":
+                _json_response(self, 200, {"items": list_items(store)})
+                return
+            # source：来源消息 ±10 条上下文（owner-only；读操作不动配额）
+            qs = parse_qs(urlparse(self.path).query)
+            conv = (qs.get("conversation") or [""])[0]
+            mid = (qs.get("messageId") or [""])[0]
+            out = []
+            try:
+                if conv.startswith("group:"):
+                    from whale_core.memory.timeline import GroupTimelineStore
+                    entries = GroupTimelineStore(store).recent(conv, limit=200)
+                    for i, e in enumerate(entries):
+                        if str(e.get("message_id") or "") == mid:
+                            for x in entries[max(0, i - 10):i + 11]:
+                                out.append({
+                                    "messageId": str(x.get("message_id") or ""),
+                                    "at": str(x.get("send_time") or ""),
+                                    "sender": str(x.get("sender_id") or ""),
+                                    "text": str(x.get("text") or "")[:200]})
+                            break
+                else:
+                    ring = store.get(f"recentmsg:{conv}")
+                    items = [x for x in (ring if isinstance(ring, list) else [])
+                             if isinstance(x, dict)]
+                    for i, x in enumerate(items):
+                        if str(x.get("mid") or "") == mid:
+                            for y in items[max(0, i - 10):i + 11]:
+                                out.append({
+                                    "messageId": str(y.get("mid") or ""),
+                                    "at": str(y.get("ts") or ""),
+                                    "sender": str(y.get("sender") or ""),
+                                    "text": str(y.get("text") or "")[:200]})
+                            break
+            except Exception:
+                out = []
+            _json_response(self, 200, {"context": out})
+
+        def do_DELETE(self):
+            if not self._authorized():
+                self.close_connection = True
+                _json_response(self, 401, {"error": "unauthorized"})
+                return
+            if self.path == "/v1/schedule/items":
+                body = self._read_json()
+                if body is None:
+                    _json_response(self, 400, {"error": "invalid json body"})
+                    return
+                from whale_core.life.schedule import delete_item
+                item_id = str(body.get("id") or "")
+                if not item_id:
+                    _json_response(self, 400, {"error": "id required"})
+                    return
+                ok = delete_item(delegates.get("store"), item_id)
+                _json_response(self, 200, {"ok": ok})
+                return
+            self.close_connection = True
+            _json_response(self, 404, {"error": "not found"})
+
         def _identity(self):
             """GET /v1/identity —— phone 角色身份与绑定设备（2026-11-19，
             Assignment 单屏绑定用）。无 token → 401；已知但非 phone 角色
@@ -1158,9 +1276,19 @@ def make_handler(delegates):
             if self.path == "/v1/identity":
                 self._identity()
                 return
+            if self.path == "/v1/schedule/candidates":
+                self._schedule_read("candidates")
+                return
+            if self.path == "/v1/schedule/list":
+                self._schedule_read("list")
+                return
+            if self.path.startswith("/v1/schedule/source"):
+                self._schedule_read("source")
+                return
             if self.path == "/v1/health":
                 _json_response(self, 200, {"ok": True,
                                            "capabilities": ["/v1/chat", "/v1/context/sync", "/v1/agent", "/v1/chat/followup", "/v1/qq/reply", "/v1/result/deliver", "/v1/identity",
+                                                            "/v1/schedule/candidates", "/v1/schedule/list", "/v1/schedule/items", "/v1/schedule/source",
                                                             "/v1/rayneo/ingest", "/v1/rayneo/query", "/v1/rayneo/control"]})
                 return
             if self.path == "/openapi.json":
@@ -1179,6 +1307,12 @@ def make_handler(delegates):
                 return
             if self.path == "/v1/agent":
                 self._agent()
+                return
+            if self.path == "/v1/schedule/candidates":
+                self._schedule_candidate_action()
+                return
+            if self.path == "/v1/schedule/items":
+                self._schedule_item_create()
                 return
             if self.path == "/v1/chat":
                 self._chat()
@@ -1299,6 +1433,19 @@ def make_handler(delegates):
                     reply, timing = delegates["companion_chat"](
                         text, conversation_id=f"glasses:{session_id}",
                         location=location, **extra)
+                # 日程提取（2026-11-19）：眼镜=owner 通道，进 owner 池；
+                # 确定性规则提取，fail-soft 不阻塞回复。
+                try:
+                    from whale_core.life.schedule import (
+                        add_candidate, extract_schedule_candidate)
+                    cand = extract_schedule_candidate(
+                        user_text,
+                        source={"conversation": f"glasses:{session_id}",
+                                "messageId": "", "at": ""})
+                    if cand is not None:
+                        add_candidate(delegates["store"], cand)
+                except Exception:
+                    pass
                 latency_ms = int(timing.get("totalMs") or 0)
                 if not (reply or "").strip():
                     _json_response(self, 200, {"reply": None, "sessionId": session_id,
@@ -1612,6 +1759,20 @@ def _openapi() -> dict:
                 "summary": "phone 角色身份与绑定设备（200 {role,device,label}；"
                            "无 token 401，非 phone 角色已知凭据 403）",
                 "security": [{"bearerAuth": []}]}},
+            "/v1/schedule/candidates": {"get": {
+                "summary": "日程候选（pending，带 source 溯源）",
+                "security": [{"bearerAuth": []}]},
+                "post": {"summary": "候选裁决 {id, action:add|reject}",
+                         "security": [{"bearerAuth": []}]}},
+            "/v1/schedule/list": {"get": {"summary": "正式日程列表",
+                                          "security": [{"bearerAuth": []}]}},
+            "/v1/schedule/source": {"get": {
+                "summary": "来源消息 ±10 条上下文（owner-only）",
+                "security": [{"bearerAuth": []}]}},
+            "/v1/schedule/items": {"post": {"summary": "手动建正式日程",
+                                            "security": [{"bearerAuth": []}]},
+                                   "delete": {"summary": "删正式日程 {id}",
+                                              "security": [{"bearerAuth": []}]}},
             "/v1/health": {"get": {"summary": "存活与能力"}},
         },
         "components": {"securitySchemes": {
@@ -1703,6 +1864,28 @@ def main(argv=None) -> int:
                       f"quota={gcfg.daily_quota}", flush=True)
     except Exception as exc:  # noqa: BLE001 — 问候循环失败不阻止主服务
         print(f"[proactive] not started: {type(exc).__name__}", flush=True)
+
+    schedule_loop = None
+    try:
+        from whale_core.api.rayneo_http import env_flag
+        if env_flag(env, "WHALE_SCHEDULE_REMIND", False) and delegates.get("agent") is not None:
+            from whale_core.life.schedule_remind import ScheduleReminderLoop
+            from whale_core.api.glasses_context import request_context_hint
+
+            def _notify(text, channel):
+                return delegates["agent"].notify_gateway.send(
+                    text=text, channel=channel, urgency="normal")
+
+            schedule_loop = ScheduleReminderLoop(
+                store=delegates["store"],
+                judge=lambda prompt: delegates["quick_chat"](prompt)[0],
+                notify=_notify,
+                facts_hint=lambda: request_context_hint(delegates["store"]))
+            if schedule_loop.start_background():
+                print("[schedule] reminder loop on interval="
+                      f"{schedule_loop.interval_s}s", flush=True)
+    except Exception as exc:  # noqa: BLE001 — 提醒循环失败不阻止主服务
+        print(f"[schedule] not started: {type(exc).__name__}", flush=True)
 
     summarizer = None
     try:
