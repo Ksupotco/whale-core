@@ -10,7 +10,21 @@ from whale_core.api.server import _error, _json_bytes
 
 
 def health(handler) -> None:
-    handler._send(200, _json_bytes({"result": {"ok": True}}))
+    result: dict = {"ok": True}
+    # 设备面 WS 网关存活闸：懒装配时代 8182 曾静默消失（2026-11-22）——
+    # 健康面如实报 relay 端口在听与否（additive 字段，不动 ok 语义）
+    gateway = getattr(handler.server.ctx, "device_gateway", None)
+    if gateway is not None and getattr(gateway, "port", 0):
+        import socket
+        try:
+            with socket.create_connection(
+                    (getattr(gateway, "host", "127.0.0.1"), gateway.port),
+                    timeout=0.5):
+                listening = True
+        except OSError:
+            listening = False
+        result["device_relay"] = {"listening": listening, "port": gateway.port}
+    handler._send(200, _json_bytes({"result": result}))
 
 
 def status(handler) -> None:

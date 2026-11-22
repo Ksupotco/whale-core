@@ -462,6 +462,18 @@ class WhaleApiServer:
     def url(self) -> str:
         return f"http://{self.host}:{self.port}/api/{API_VERSION}"
 
+    def _start_device_gateway(self) -> None:
+        """设备 WS 网关随服务启动就位：此前懒装配（首个设备 REST 调用才建），
+        重启后若无 REST 触碰则 relay 端口静默不在（2026-11-22 实证 tailscaled
+        转发无后端）。websockets 为可选依赖——缺失/失败仅降级设备面。"""
+        try:
+            from whale_core.api.devices_api import ensure_device_services
+            ensure_device_services(self.ctx, self._httpd)
+        except Exception:  # noqa: BLE001
+            import logging
+            logging.getLogger("whale.api").warning(
+                "device gateway 启动失败（设备面降级，API 仍服务）", exc_info=True)
+
     def start(self) -> None:
         """后台线程启动（不阻塞宿主主循环）。"""
         if self.ctx.worker:
@@ -469,10 +481,12 @@ class WhaleApiServer:
         self._thread = threading.Thread(target=self._httpd.serve_forever,
                                         name="whale-api", daemon=True)
         self._thread.start()
+        self._start_device_gateway()
 
     def serve_forever(self) -> None:
         if self.ctx.worker:
             self.ctx.worker.start()
+        self._start_device_gateway()
         try:
             self._httpd.serve_forever()
         finally:
