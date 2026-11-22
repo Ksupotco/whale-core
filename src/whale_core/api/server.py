@@ -259,6 +259,10 @@ class _Handler(BaseHTTPRequestHandler):
             routes.system.security_defaults(self)
         elif head == 'providers' and parts == ['providers', 'test'] and method == 'POST':
             routes.system.provider_test(self)
+        elif head == 'providers':
+            # 供应商管理面（2026-11-22 控制台重构 · 裁决③④，Tob 批准）
+            from whale_core.api import providers_api as _providers
+            _providers.dispatch_providers(self, method, parts, query)
         elif head == 'capabilities' and len(parts) == 2 and method == 'POST':
             routes.media.capability(self, parts[1])
         elif head == 'video':
