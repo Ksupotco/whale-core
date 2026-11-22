@@ -285,6 +285,13 @@ device.output.read         device.screen.record       device.status
 - REST：`POST /api/v2/chat/attachments`（multipart）→ `201` AttachmentRef；`GET /api/v2/attachments/{attachment_id}` 下载；`DELETE` 同路径删除。消息体只携带 attachment_id，**不在 JSON 中反复传 Base64**。
 - Core 生成的图片/视频同样落地为附件，以 attachment_id 引用，不返回临时 URL。
 
+- 设备级鉴权（/api/v2/* 面，控制台 Bearer 之外的设备通道）：请求头
+  ``X-Whale-Device-Id``（32-hex）+ ``X-Whale-Timestamp``（Unix 秒，±300s 窗）
+  + ``X-Whale-Nonce``（16..128 随机，服务端 5min 防重放）+
+  ``X-Whale-Signature``（Ed25519 对 ``device_id\nts\nnonce\nMETHOD\npath``
+  的 UTF-8 字节签名，128-hex）。fail-closed（无效签名 401）；吊销/非 active
+  设备拒；不给管理面（/api/v1/*）权限。
+
 ## 12. 执行轨迹与录制
 
 ### 12.1 RunTraceEvent（objects/run-trace-event + run.trace.event 消息）

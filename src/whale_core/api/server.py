@@ -129,6 +129,24 @@ class _Handler(BaseHTTPRequestHandler):
             return False
         return hmac.compare_digest(header[7:].encode(), expected.encode())
 
+    def _device_signature_authorized(self, method: str, path: str) -> bool:
+        """设备级 Ed25519 签名鉴权（/api/v2/* 面；WSS challenge-response 同模型）。
+
+        设备带四头（X-Whale-Device-Id/Timestamp/Nonce/Signature）→ 验签过
+        registry 公钥；fail-closed；不动控制台 Bearer/cookie。
+        """
+        try:
+            from whale_core.api.device_signauth import verify_device_request
+            from whale_core.devices.registry import DeviceRegistry
+            ctx = self.ctx
+            registry = getattr(ctx, "device_registry", None)
+            if not isinstance(registry, DeviceRegistry):
+                registry = DeviceRegistry(ctx.store)
+            return verify_device_request(
+                ctx.store, registry, self.headers, method, path)
+        except Exception:  # noqa: BLE001 — 鉴权面异常一律 fail-closed
+            return False
+
     def _send(self, status: int, body: bytes, content_type: str = "application/json") -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type + "; charset=utf-8")
@@ -197,8 +215,11 @@ class _Handler(BaseHTTPRequestHandler):
             # Bearer 之外接受同源控制台会话 cookie（写操作强制 CSRF 头）
             from whale_core.api import console_session
             if not console_session.cookie_authorized(self):
-                self._send(401, _error("unauthorized", "missing or invalid bearer token"))
-                return
+                # /api/v2/ 移动端聊天面：设备级 Ed25519 签名鉴权（fail-closed）
+                if not (api_prefix == "/api/v2/"
+                        and self._device_signature_authorized(method, path)):
+                    self._send(401, _error("unauthorized", "missing or invalid bearer token"))
+                    return
         origin = self.headers.get('Origin')
         if origin:
             origin_parts = urlparse(origin)
