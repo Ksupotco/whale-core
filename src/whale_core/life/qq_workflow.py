@@ -61,7 +61,7 @@ class QqInboundWorkflow:
                  prefs: ProactivePrefs | None = None,
                  now_fn: Callable[[], datetime] | None = None,
                  orchestrator=None,
-                 safety_reviewer=None,
+                 safety_reviewer=None, slow_brain=None,
                  completion_sender=None,
                  media_validator=None,
                  media_url_resolver=None,
@@ -92,6 +92,8 @@ class QqInboundWorkflow:
         # 可选安全审核（llm.safety 角色）：callable(reply) -> None=通过 | str=顾虑原因；
         # 有顾虑的草稿强制 needs_approval（不自动发送），由人工终审。
         self._safety_reviewer = safety_reviewer
+        # 两档回复（2026-11-21 主人令）：慢档脑（kimi-k3 思考），None=无慢档
+        self._slow_brain = slow_brain
         # 可选补发回调（两段式慢任务）：callable(event, reply) -> None。
         # 由宿主注入真实发送路径（草稿+审批+网关）；慢任务 ack 后的结果经此补发。
         self._completion_sender = completion_sender
@@ -668,10 +670,16 @@ class QqInboundWorkflow:
                 cap_note, defer = self._caption_context(images)
                 if cap_note:
                     text = text + "\n" + cap_note
+                # 两档回复（主人令 2026-11-21）：慢档会话 → 慢档脑随信封走。
+                from whale_core.life.model_registry import get_tier
+                _env_model = (self._slow_brain
+                              if (self._slow_brain is not None
+                                  and get_tier(self.store, event.conversation) == "slow")
+                              else None)
                 envelope = InputEnvelope(
                     conversation_id=event.conversation, text=text, source="qq:owner",
                     channel="qq", owner_id=event.owner_id, images=images,
-                    defer_images=defer,
+                    defer_images=defer, model=_env_model,
                     sender_id=event.sender_id)
                 if self._completion_sender is not None and self._parallel_enabled():
                     # 2026-11-06：DS 第一条秒回；意图后台判定，需要工具时补发第二条。
@@ -699,8 +707,14 @@ class QqInboundWorkflow:
                         channel=event.channel,
                         sender_id=event.sender_id or event.owner_id,
                         conversation_id=event.conversation)
+                # 两档回复：kv conversation_id→tier；默认快速（model=None 走主脑）。
+                from whale_core.life.model_registry import get_tier
+                _model = (self._slow_brain
+                          if (self._slow_brain is not None
+                              and get_tier(self.store, event.conversation) == "slow")
+                          else None)
                 reply = self.companion.chat(text, conversation_id=event.conversation,
-                                            context=fallback_ctx)
+                                            context=fallback_ctx, model=_model)
         if not reply or not reply.strip():
             return {"empty_reply": True, "draft_id": None}
 

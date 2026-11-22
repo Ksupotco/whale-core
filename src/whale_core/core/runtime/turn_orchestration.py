@@ -448,7 +448,8 @@ class TurnOrchestrationMixin:
             images=env.images, context=env.context,
             on_delta=env.on_delta, should_stop=env.should_stop,
             metrics=env.metrics, on_phase=env.on_phase,
-            defer_images=getattr(env, "defer_images", False))
+            defer_images=getattr(env, "defer_images", False),
+            model=getattr(env, "model", None))
 
     def _mark_followup(self, task_id: str, first: str) -> None:
         """台账标记：本任务的结局是「第一条之后的跟进」，组装时带上第一条原文。"""

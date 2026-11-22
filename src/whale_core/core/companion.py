@@ -215,7 +215,7 @@ class WhaleCompanion:
              write_space: str | None = None, location: str | None = None,
              on_delta=None, should_stop=None, metrics=None, on_phase=None,
              followup: bool = False, persona_id: str | None = None,
-             defer_images: bool = False) -> str:
+             defer_images: bool = False, model=None) -> str:
         # 不把整轮 LLM 包进 conversation_lock：同会话重叠请求要能在 A 还在生成时
         # 读到 A 已落盘的用户原话。历史读写各自短临界区（见 _chat）。
         return self._chat(text, conversation_id=conversation_id, user_text=user_text,
@@ -225,7 +225,8 @@ class WhaleCompanion:
                           write_space=write_space, location=location,
                           on_delta=on_delta,
                           should_stop=should_stop, metrics=metrics,
-                          on_phase=on_phase, defer_images=defer_images)
+                          on_phase=on_phase, defer_images=defer_images,
+                          model=model)
 
     def _chat(self, text: str, *, conversation_id: str = "", user_text: str | None = None,
               images: Sequence[bytes] = (), turn_key: str = "",
@@ -233,7 +234,7 @@ class WhaleCompanion:
               write_space: str | None = None, location: str | None = None,
               on_delta=None, should_stop=None, metrics=None, on_phase=None,
               followup: bool = False, persona_id: str | None = None,
-              defer_images: bool = False) -> str:
+              defer_images: bool = False, model=None) -> str:
         original = text if user_text is None else user_text
         # issue #45：真实阶段反馈（接收→上下文/记忆构建→模型请求→整理）；
         # 无回调时零开销。阶段与耗时全部实测，不伪造进度百分比。
@@ -529,9 +530,11 @@ class WhaleCompanion:
                                    "metrics": metrics})
             except (TypeError, ValueError):
                 pass
-        # 视觉腿归属：直带图回合 → 视觉模型；defer 首轮文本 → 主模型
-        vision = self.vision_model or self.model
-        first_brain = vision if (images and not defer_images) else self.model
+        # 两档回复（2026-11-21 主人令）：model 覆盖参切换档位脑（文本路由）；
+        # 视觉腿归属不变（图进模型仍走视觉脑）。
+        main = model if model is not None else self.model
+        vision = self.vision_model or main
+        first_brain = vision if (images and not defer_images) else main
         response = first_brain.reply(text, **kwargs)
         if deferred:
             from whale_core.life.image_caption import ESCALATE_MARK

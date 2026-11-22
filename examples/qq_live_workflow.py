@@ -135,9 +135,18 @@ class StubBrain:
 
 
 def build_brain():
-    """直接回复脑（WHALE_REPLY_* 优先；回落 QQ_INTENT_*/DEEPSEEK_*）。"""
-    model = (os.environ.get("WHALE_REPLY_MODEL")
-             or os.environ.get("DEEPSEEK_MODEL") or "deepseek-chat").strip()
+    """直接回复脑。注册表优先（WHALE_REPLY_MODEL=注册表 name；2026-11-21 主人令）；
+    未命中注册表回落旧裸 id 行为（向后兼容）。"""
+    _raw = (os.environ.get("WHALE_REPLY_MODEL") or "").strip()
+    if _raw:
+        try:
+            from whale_core.life.model_registry import resolve_brain
+            _b = resolve_brain(_raw, env=os.environ, store=globals().get("_store_ref"))
+            if _b is not None:
+                return _b
+        except Exception:
+            pass
+    model = (_raw or os.environ.get("DEEPSEEK_MODEL") or "deepseek-chat").strip()
     base = (os.environ.get("WHALE_REPLY_BASE_URL")
             or os.environ.get("QQ_INTENT_BASE_URL")
             or os.environ.get("DEEPSEEK_BASE_URL") or "").strip() or None
@@ -159,9 +168,18 @@ def build_brain():
 
 
 def build_vision_brain():
-    """视觉脑（图进模型唯一腿）：WHALE_VISION_MODEL 指定走 agentscope
-    （qwen4-max 实证视觉）；未设回落 DEEPSEEK_*（flash）。"""
+    """视觉脑（图进模型唯一腿）：WHALE_VISION_MODEL=注册表 name 优先
+    （qwen4-max 实证视觉）；未命中回落旧裸 id / DEEPSEEK_*（flash）。"""
     model = (os.environ.get("WHALE_VISION_MODEL") or "").strip()
+    if model:
+        try:
+            from whale_core.life.model_registry import resolve_brain
+            _b = resolve_brain(model, env=os.environ, store=globals().get("_store_ref"))
+            if _b is not None:
+                print("[brain] 视觉脑（注册表 %s）" % model)
+                return _b
+        except Exception:
+            pass
     if model:
         base = (os.environ.get("WHALE_VISION_BASE_URL")
                 or os.environ.get("QQ_INTENT_BASE_URL") or "").strip() or None
@@ -534,6 +552,12 @@ def cmd_run(args) -> int:
             send_port.start_closer()
             print(f"[完整模式] 按需窗口 idle={send_port.idle_min:g}min")
 
+    globals()["_store_ref"] = store
+    try:
+        from whale_core.life.model_registry import seed_registry
+        seed_registry(store)
+    except Exception:
+        pass
     inbox = build_inbox(args.inbox)
     # 陌生人/成员被动回复日额度可用 env 覆盖（默认 20；测试期可调大）
     # 2026-11-05 owner 决策：默认不限（0）；显式设正整数才启用上限
@@ -555,6 +579,16 @@ def cmd_run(args) -> int:
                                  context_resolver=context_resolver,
                                  stranger_daily_limit=_stranger_limit)
     workflow.companion.vision_model = build_vision_brain()
+    # 两档回复慢档脑（kimi-k3 effort=high 思考；主人令 2026-11-21）
+    try:
+        from whale_core.life.model_registry import resolve_brain
+        _slow = resolve_brain("kimi-k3", env=os.environ, store=store,
+                              max_tokens=8192)
+        if _slow is not None:
+            workflow._slow_brain = _slow
+            print("[两档] 慢档脑=kimi-k3（effort=high）")
+    except Exception as exc:
+        print(f"[两档] 慢档脑装配失败 fail-soft：{type(exc).__name__}")
 
     def _send_audio_artifacts(audio_ids, *, peer_type: str = "",
                               target: str = "") -> int:
@@ -956,12 +990,10 @@ def cmd_run(args) -> int:
 
     # 安全审核模型（可选，默认关）：QQ_SAFETY_MODEL=<模型 id> 开启——
     # 回复发送前由该模型复核；有顾虑的草稿强制转人工审批（不自动发）。
-    safety_model_id = os.environ.get("QQ_SAFETY_MODEL", "").strip()
-    if not safety_model_id and intent_model_id:
-        safety_model_id = intent_model_id  # 审核与意图同一插件（owner 决策）
-    if safety_model_id.lower() == "off":
-        safety_model_id = ""               # 显式关闭
-    if safety_model_id:
+    # 2026-11-21 主人明令：回复内容审核门去掉（普通聊天发出不审核，慢档同不过）。
+    # workflow._safety_reviewer 保持 None——三处审核点（主回复/补发/重发）全旁路。
+    # @/工具/send_to 门控 + 34 类高危 + 两阶段确认等安全面不受影响。
+    if False:
         from whale_core.core.deepseek import DeepSeekCompanion as _DS
         # 审核模型与意图模型同一端点（QQ_INTENT_* 覆盖生效于两者）
         # 2026-11-05：超时收紧 + 短句快路径，避免 kimi 审核拖高群回复尾延迟

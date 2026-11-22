@@ -1314,6 +1314,26 @@ def make_handler(delegates):
             if self.path == "/v1/schedule/items":
                 self._schedule_item_create()
                 return
+            if self.path == "/v1/reply/tier":
+                # 两档回复管理端点（主人令 2026-11-21）：对话级设档
+                # {conversation_id, tier: fast|slow}——后台/管理端操作，
+                # 不做聊天内前缀/命令。
+                body = self._read_json()
+                if body is None:
+                    _json_response(self, 400, {"error": "invalid json body"})
+                    return
+                from whale_core.life.model_registry import set_tier, get_tier
+                conv = str(body.get("conversation_id") or "").strip()
+                tier = str(body.get("tier") or "").strip()
+                if not conv:
+                    _json_response(self, 400, {"error": "conversation_id required"})
+                    return
+                if not set_tier(delegates["store"], conv, tier):
+                    _json_response(self, 400, {"error": "tier must be fast|slow"})
+                    return
+                _json_response(self, 200, {"ok": True, "conversation_id": conv,
+                                           "tier": get_tier(delegates["store"], conv)})
+                return
             if self.path == "/v1/chat":
                 self._chat()
                 return
