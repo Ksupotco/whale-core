@@ -213,7 +213,8 @@ def test_unread_post_body_rejection_closes(server, path, token, status):
     (b"Content-Length: -1\r\n", b"{}"),
     (b"Content-Length: +2\r\n", b"{}"),
     (b"Content-Length: 0\r\n", b"{}"),
-    (b"Content-Length: 65537\r\n", b"{}"),
+    # 65537 对 /v1/qq/reply 超限（64K）；/v1/chat 自 2026-11-21 起允许 16MB
+    # （云端 ASR 音频体），其超限用例单独参数化在下方。
     (b"Content-Length: 2\r\nContent-Length: 2\r\n", b"{}"),
     (b"Content-Length: 2\r\nContent-Length: 3\r\n", b"{}"),
     (b"Content-Length: 2, 2\r\n", b"{}"),
@@ -227,6 +228,15 @@ def test_invalid_body_framing_or_json_closes(server, path, framing, body):
     _assert_raw_rejection_closes(
         server, path, b"Authorization: Bearer phone-token\r\n" + framing,
         body, 400)
+
+
+@pytest.mark.parametrize("path,limit", [("/v1/qq/reply", 65537),
+                                        ("/v1/chat", 16 * 1024 * 1024 + 1)])
+def test_oversized_content_length_closes(server, path, limit):
+    _assert_raw_rejection_closes(
+        server, path,
+        f"Authorization: Bearer phone-token\r\nContent-Length: {limit}\r\n".encode(),
+        b"{}", 400)
 
 
 def test_http11_valid_requests_keep_connection(server):

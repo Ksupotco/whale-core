@@ -1397,12 +1397,54 @@ def make_handler(delegates):
                 return
             _json_response(self, 200, payload)
 
+        # /v1/chat 允许音频体（≤10MB → base64 ≈13.4MB；护栏 a：与 nginx 对齐）
+        _CHAT_BODY_MAX = 16 * 1024 * 1024
+
         def _chat(self):
             from whale_core.api.glasses_context import split_chat_context
-            body = self._read_json()
+            body = self._read_json(max_bytes=self._CHAT_BODY_MAX)
             if body is None:
                 _json_response(self, 400, {"error": "invalid json body"})
                 return
+            # 云端 ASR（主人令 2026-11-20，护栏 b：缺省=纯文本旧行为完全兼容）：
+            # 可选 audio {base64, format} → 转写文本并入 text。
+            audio = body.get("audio")
+            if audio is not None:
+                if not isinstance(audio, dict):
+                    _json_response(self, 400, {"error": "audio must be {base64, format}"})
+                    return
+                try:
+                    import base64 as _b64
+                    audio_bytes = _b64.b64decode(str(audio.get("base64") or ""),
+                                                 validate=True)
+                except Exception:
+                    _json_response(self, 400, {"error": "audio base64 invalid"})
+                    return
+                if not audio_bytes:
+                    _json_response(self, 400, {"error": "audio empty"})
+                    return
+                if len(audio_bytes) > 10 * 1024 * 1024:
+                    _json_response(self, 400, {"error": "audio exceeds 10MB"})
+                    return
+                env = getattr(self.server, "glasses_env", {}) or {}
+                from whale_core.life.cloud_asr import AsrError, transcribe
+                try:
+                    asr_text = transcribe(
+                        audio_bytes,
+                        fmt=str(audio.get("format") or "wav"),
+                        base_url=(env.get("WHALE_ASR_BASE_URL")
+                                  or env.get("QQ_INTENT_BASE_URL") or "").strip()
+                        or "https://platform.agentscope.io",
+                        api_key=(env.get("WHALE_ASR_API_KEY")
+                                 or env.get("QQ_INTENT_API_KEY") or "").strip())
+                except AsrError as exc:
+                    # 护栏 c：fail-closed 诚实报错，不静默吞
+                    _json_response(self, 502,
+                                   {"error": "asr_failed", "kind": exc.kind})
+                    return
+                merged = (asr_text + "\n" + str(body.get("text") or "")).strip()
+                body = dict(body, text=merged)
+
             text = str(body.get("text") or "").strip()
             context = body.get("context")
             if context is not None and not isinstance(context, dict):
