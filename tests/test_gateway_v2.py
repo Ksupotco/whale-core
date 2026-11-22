@@ -254,7 +254,9 @@ class TestCapabilities:
             all_capabilities,
             query_operations,
         )
-        assert len(all_capabilities()) == 32
+        assert len(all_capabilities()) == 33
+        assert "device.media.seek_to" in all_capabilities()
+        assert "device.media.seek_to" in action_capabilities()
         assert "device.shell" in action_capabilities()
         assert "device.output.read" in query_operations()
         assert "device.output.read" not in action_capabilities()

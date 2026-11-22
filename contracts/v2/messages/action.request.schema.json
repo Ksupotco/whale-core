@@ -103,6 +103,7 @@
             "device.file.write",
             "device.file.list",
             "device.logcat",
+            "device.media.seek_to",
             "device.stop",
             "device.screen.record"
           ],
@@ -168,6 +169,7 @@
               "device.file.write",
               "device.file.list",
               "device.logcat",
+              "device.media.seek_to",
               "device.stop",
               "device.screen.record"
             ]

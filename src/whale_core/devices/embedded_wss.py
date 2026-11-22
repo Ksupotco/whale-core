@@ -241,6 +241,11 @@ class EmbeddedWssGateway:
         from websockets.exceptions import ConnectionClosed
 
         if getattr(getattr(ws, "request", None), "path", WS_PATH) != WS_PATH:
+            # 诊断（#VoIP-1008 排查）：记实际 path（不含敏感内容），
+            # 一次拒绝一行，定位「路径无误却被闭」的真实形态
+            actual = getattr(getattr(ws, "request", None), "path", None)
+            log.warning("拒绝非 %s 路径的 WS 连接：实际 path=%r",
+                        WS_PATH, actual)
             ws.close(1008, f"only {WS_PATH} is served here")
             return
         st = ConnectionState(ws)

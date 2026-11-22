@@ -89,6 +89,19 @@ device.file.list           device.logcat              device.stop
 device.output.read         device.screen.record       device.status
 ```
 
+**契约增量（草案，core #96；mobile 实现落地后回填 schema 枚举并删此注记）**：
+
+- `device.media.seek_to`：媒体进度直达（seek 无键码，GUI 拖条已证不可行）。
+  - arguments 二选一：`{"position_ms": int≥0}` 或 `{"ratio": float∈[0,1]}`；
+    两者同给时 `position_ms` 优先（ratio 依赖 duration 可得性，position_ms
+    确定性优先）。
+  - 执行经 transportControls.seekTo；无活跃会话/未授权/歧义目标 →
+    `unavailable`/`failed` 诚实终态（沿用 fail-closed 纪律，绝不盲拖）；
+    ratio 在 duration 未知时应 honest `failed` 而非估算。
+  - verify 口径：观察 `media.position_ms` 落点在目标 ±2s 内 passed
+    （与观察 media 段闭环自洽）。
+  - scope 表增同名项；两仓 CapabilitiesV2 / schema 枚举待 mobile 实现后同步。
+
 ### 5.2 DeviceDescriptor / DeviceCapabilities（objects/device-descriptor）
 
 设备在 `device.hello` 中声明完整描述：
