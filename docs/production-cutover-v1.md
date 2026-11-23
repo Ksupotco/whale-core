@@ -11,7 +11,7 @@
 | 代码 | `/opt/whale/whale-core`（git main=2dd4b9a 压缩后） | 新目录 `/opt/whale/whale-v1`（clone 自 GitHub main，push 完成后） |
 | 服务 | whale-glasses(:8191) · whale-api(:8180) · whale-core-dev8190 · qq-bot · qq · whale-qq-watchdog.timer | 单服务 `whale-v1.service`（whale serve，监听 127.0.0.1:8180 或分配端口） |
 | 数据 | `/opt/whale/state/`（qq_workflow 等 4 库 + artifacts 等） | `/opt/whale/v1-data/`（迁移器产出 whale.db + config.json + secrets.json） |
-| QQ | qq.service + qq-bot（WeQ 外置进程 + 工作流） | channels.onebot（OneBot v11，config.json `channels.qq` 段；**WeQ/协议端衔接方式待 Tob 确认**：现网 QQ 走 WeQ 外置进程，v3 onebot 渠道接 OneBot 协议端（NapCat 类）——若现网协议端就是 WeQ，需要 OneBot 兼容层或换 NapCat，这是③的前置确认项） |
+| QQ | qq.service + qq-bot（WeQ 外置进程 + 工作流） | channels.qq **backend=weq**（主人裁决 2026-11-23：OneBot 与 WeQ 双支持、config 驱动切换；现网 WeQ 栈不动——v3 经 webhook 收 WeQ 推送 + tRPC 出站）；backend=onebot 保留给 NapCat 类协议端 |
 | 眼镜 | whale-glasses :8191 + 东京反代 `/turbo/v1/*` | v1 无眼镜轻量面；眼镜桥应迁移为 Link 客户端（role=glasses）——**眼镜侧改造是独立工作项（应用开发/眼镜桥），③期间眼镜功能会缺口**，需主人确认是否接受或保 v2 glasses 服务并存一段 |
 | 公网 | CF→东京 nginx→N100:8191 | 切到 v1 端口；`/api/*` 鉴权 Bearer；控制台路径 `/` |
 
@@ -35,9 +35,33 @@
 | S0 | 备份（§2）+ 校验（tar 可解、bundle verify） | 备份完整性 | — |
 | S1 | N100 clone v1 代码到 `/opt/whale/whale-v1`；`pip install -e .`（系统 python3，无 venv，与现网一致） | `whale --version` = 1.0.0 | 删目录 |
 | S2 | 迁移数据：state 快照 → `migrate_v2_to_v1.py --data /opt/whale/v1-data` → 对账报告（计数与 dry-run 基线一致：627/3/3/151/60） | 对账报告 + 抽检 candidate 记忆 10 条 | 删 v1-data |
-| S3 | 配置 v1：config.json（QQ onebot 渠道、模型 provider、agent.name、autonomy 关）；secrets 只写 key 引用，值从现网 secrets 复制（不落日志） | `whale doctor` | — |
+| S3 | 配置 v1：config.json（QQ weq 渠道、模型 provider、agent.name、autonomy 关、**回复档位与思考强度——见 §3.1**）；secrets 只写 key 引用，值从现网 secrets 复制（不落日志） | `whale doctor` + `models.test` 全角色 | — |
+
+### 3.1 回复档位与模型配置（主人令 f850274d：切换后默认慢档高思考）
+
+切换完成后 v1 默认回复 = **慢档 kimi-k3 high 思考**（完整缓冲想完一次性发，非流式快答）。
+v2 两档语义 → v1 映射：v2 `kv replytier` 默认档 slow ⇔ v1 `agent.reply_gear="slow"` + chat 角色 `reasoning_effort="high"`。
+
+S3 写入的配置项（config.json 可见面 / secrets.json 只写值）：
+
+```json
+{
+  "models": {
+    "providers": [{"id": "kimi", "kind": "openai", "base_url": "https://api.moonshot.cn/v1", "label": "Kimi"}],
+    "chat":  {"provider": "kimi", "model": "kimi-k3", "reasoning_effort": "high", "temperature": 0.7, "max_tokens": 2048},
+    "fast":  {"provider": "<现有便宜模型>", "model": "…", "temperature": 0.2, "max_tokens": 800},
+    "vision": {"provider": "kimi", "model": "<视觉模型>", "reasoning_effort": ""}
+  },
+  "agent": {"reply_gear": "slow", "name": "鲸鱼"}
+}
+```
+
+- secrets：`provider.kimi` = Moonshot API key（从现网 secrets 复制，不进日志/文档）。
+- 语义校验点：slow 档下 `run.delta` 零增量事件、回复整段一次性出现；渠道（QQ/通知）本就完成后投递，行为不变。
+- 控制台对应 UI：设置→模型→角色行的「思考强度」下拉；设置→智能体→「回复档位」。
+- 回退口径：把 `agent.reply_gear` 改回 `fast` 即恢复流式（config.update 即时生效，无需重启）。
 | S4 | 起 v1 服务（先仅 127.0.0.1）→ 控制台自验（令牌登录/对话一轮 ScriptedModel 外的真实模型/记忆命中迁移条目 candidate 可见） | 控制台人工验收 | systemctl stop whale-v1 |
-| S5 | QQ 切换：停 qq.service/qq-bot，onebot 渠道指向协议端 → 主人私聊一条 → 群 @ 一条 | QQ 双向实测 | 启回 v2 QQ |
+| S5 | QQ 切换：停 qq.service/qq-bot；v1 `channels.qq`（backend=weq）配置 weq_web_url+token，WeQ 推送地址改指 v1 webhook（`/api/hooks/channel-qq/inbound`）→ 主人私聊一条 → 群 @ 一条 | QQ 双向实测 | WeQ 推送指回 v2 监听口 + 启回 v2 QQ |
 | S6 | 公网切换：东京 nginx `/turbo/*` → v1 端口（或按确认项只切手机/控制台路径，眼镜路径暂留 v2:8191 并存） | 公网 health+RPC 401/200 矩阵 | nginx 切回 |
 | S7 | v2 五服务 `disable`（不删）；观察 48h | 无回滚需求即封盘 | enable 即回 |
 
@@ -57,9 +81,9 @@
 3. v1-data 保留封存（回滚后再切换不用重迁）
 4. 已知有损点：切换窗口内 v1 侧新产生的对话/记忆不回灌 v2（可接受——回滚窗口按小时计）
 
-## 6. 待主人/Tob 确认项
+## 6. 裁决记录与待确认项
 
-1. **QQ 协议端**：现网 WeQ 外置进程 vs v3 onebot（NapCat 类）——是换协议端还是加兼容层？（影响 S5）
-2. **眼镜缺口**：③期间眼镜功能暂停（等 Link 化改造）还是 v2 glasses 服务并存？（影响 S6）
-3. 切换日窗口（建议工作日晚间低峰，48h 观察期跨工作日）
-4. v1 监听端口分配（建议沿用 127.0.0.1 + tailscale 绑定纪律）
+1. ~~**QQ 协议端**~~（2026-11-23 主人裁决）：**OneBot 与 WeQ 双支持、config 驱动切换**；③ 切换走 `backend=weq`（现网 WeQ 栈无缝接入），onebot 保留给 NapCat 类协议端。
+2. ~~**眼镜缺口**~~（2026-11-23 主人裁决）：③期间**暂停**；眼镜 Link 化（role=glasses）另线开发，独立项。
+3. 切换日窗口（建议工作日晚间低峰，48h 观察期跨工作日）——待定。
+4. v1 监听端口分配（建议沿用 127.0.0.1 + tailscale 绑定纪律）——待定。
