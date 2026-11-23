@@ -1,145 +1,82 @@
 <div align="center">
 
-# whale-core
+# Whale-Core
 
 *山有木兮木有枝，心悦君兮君不知*
 
-鲸鱼的核心大脑：对话、记忆、工具、语音与主动探索。
+一个以个人 AI Agent 为核心的智能体系统：持续记忆、独立判断、任务规划、工具使用、主动探索与外部交互。
 
-[English](README_EN.md) · [使用与部署](docs/deployment.md) · [能力配置](docs/media-and-voice.md) · [开发者指南](docs/AI_DEVELOPMENT_GUIDE.md)
+[架构](docs/ARCHITECTURE.md) · [协议](docs/PROTOCOL.md) · [开发](docs/DEVELOPMENT.md)
 
 </div>
 
-## 这是什么
+## 它是什么
 
-whale-core 是鲸鱼的核心大脑：一个可扩展的 AI 伴侣与行动智能体，把对话、人格、长期记忆、意图判断、工具调用与主动行为组织在同一套智能层里。鲸鱼既能聊天，也能通过接入的设备观察环境、作出选择并完成任务。「电子女友」是其中一种体验形态，不是能力边界。
+把 Whale 理解为一个 **AI 的操作系统**：模型是它的思考能力，记忆是它的长期经验，人格是它的行为特征，能力（工具、插件、设备）扩展它能做的事，客户端是它与世界交互的接口。
 
-角色人格来自用户选用或导入的角色卡，核心不内置角色禁忌表；设备操作、外部工具和记忆访问由真实执行权限控制，不交给角色提示词判断。
+v1 是一次从零开始的重建。整个系统只有一条主干：**每一个输入都成为一个 Run**——回忆记忆、思考、调用能力（必要时请你批准）、回复——每一步实时可见、持久可查。控制台、手机、QQ、眼镜和定时任务走的是同一条路。
 
-网页控制台、QQ、手机、通话与眼镜共享这套智能层。Android 端的感知与执行在 [whale-mobile](https://github.com/amwangfan/whale-mobile)；QQ/WeQ 渠道桥接在 [whale-io](https://github.com/amwangfan/whale-io)。
+## 现在能做什么
 
-本仓库提供核心库、命令行、管理 API、网页控制台，以及 Linux/macOS 桌面入口和容器部署。官方搜索与 QQ 渠道插件随安装包分发；第三方目录插件按显式路径加载，不做自动发现。
+| 能力 | 说明 |
+| --- | --- |
+| 对话与人格 | 多会话、流式回复、看图；人格卡可编辑，兼容 Character Card V2 导入 |
+| 长期记忆 | 每轮对话后台提取明确说过的事实/偏好/经历（必须有原话依据）；重复则强化，矛盾则新条目取代旧条目，相关则建立关系；混合检索（全文 + 向量 + 重要度 + 衰减强度）并解释命中原因；遗忘曲线与墓碑式删除 |
+| 记忆边界 | 以主人为中心：群聊记忆单向流入主人会话；其他人的私聊完全隔离；只有鲸鱼自己总结的性格与口癖跨会话共享；非主人会话不提供 Shell、任务、设备等能力（[详情](docs/MEMORY.md)） |
+| 手机经历 | 鲸鱼专用手机：全部能力、经历原样记录；主人日常手机：系统隐私界面（锁屏、密码框、输入法、系统界面、安全中心、密码管理器）与你排除的应用/网站不保存，其余默认记录并脱敏验证码与卡号；每 30 分钟按片段整理成记忆 |
+| 可观测性 | 每次回复都能展开"思维轨迹"：用了哪些记忆、为什么、调用了什么能力、耗时、是否等待审批 |
+| 能力与权限 | 内置时间、记忆、网页搜索/阅读、通知、Shell；插件与设备能力统一注册；按风险默认放行/询问，可逐项设为允许/询问/禁止；审批在任意客户端处理 |
+| 任务（Goal 模式） | 给一个目标，Agent 自己写计划、逐步执行、把子问题委派给子 Agent；可一次性、定时（cron）或周期执行；Agent 也能自己创建提醒 |
+| 自主探索 | 空闲时按兴趣搜索阅读，写探索日记，产出候选知识等你确认；主动消息统一经过静默时段、日额度和冷却 |
+| 客户端与设备 | Link v1 协议：一个 WebSocket，RPC + 事件 + 能力声明；whale-mobile 设备经设备线协议（`/api/devices/ws`）接入，设备能力自动成为 Agent 能力 |
+| 离线可用 | 未配置模型时有一个确定性的"离线大脑"，可以先体验记忆、任务与界面 |
 
-## 界面
+## 快速开始
 
-以下截图来自本地临时配置和示例数据，不含真实账号、令牌或服务凭据。
-
-![运行总览](docs/screenshots/readme-overview.png)
-
-![与鲸鱼对话](docs/screenshots/readme-chat.png)
-
-<img src="docs/screenshots/readme-mobile.png" width="320" alt="手机布局下的运行总览">
-
-## 可以做什么
-
-| 功能 | 当前实现 | 使用条件 |
-| --- | --- | --- |
-| 对话与记忆 | 多轮历史、人格、SQLite 持久化、记住/忘掉、会话恢复、记忆浏览与删除、聊天收图（可作参考图）；按相关性召回同会话旧情节 | 可用的 OpenAI 兼容文字模型；收图需要多模态模型 |
-| 搜索与阅读 | 搜索、抓取、保留来源链接、组合阅读工作流 | Tavily / Brave 密钥、DeepSeek 官方 Search API，或把 `WHALE_SEARCH_PROVIDER` 设为 `bing` / `duckduckgo` 走免 key 档；免 key 档可能被反爬限流 |
-| 插件与设置 | 清单、真实启停、持久配置、连接测试、即时生效、分角色模型（意图/执行/审核）、每日请求预算、人格禁忌、诊断 | 控制台设置；第三方清单还需宿主提供执行器 |
-| 工具任务 | 持久轨迹、步骤与期限、取消、逐项审批与恢复、慢任务先回执后补发、进程重启后恢复在途任务 | 高风险动作始终经过策略层；未知外部结果不会自动重试 |
-| 语音与媒体 | ASR、TTS、生图、Wan 异步视频、私有产物；TTS 产物可发成 QQ 语音消息，图片可图文混排发送 | 按需配置 DashScope 兼容平台或 OpenAI 兼容端点；配置与联调边界见[能力配置](docs/media-and-voice.md) |
-| 实时语音 | 原生 Realtime WSS 会话（浏览器麦克风、打断、人格与记忆、转写写入记忆）；另有 whale-io PCM 中继用于低延迟通话 | 兼容 Realtime 协议的服务与 `voice` 可选依赖；PCM 中继尚未与真实音频桥联调 |
-| 语义记忆 | 可选真实 embedding 与关键词融合召回、失败回退、缓存清理；原始对话情节只按相关性召回，不自动升级为长期事实 | 配置 OpenAI 兼容 embedding 端点；未配置时只用关键词 |
-| 主人长期事实 | 可信主人的 QQ 私聊与眼镜对话中，明确自述的原话可自动沉淀为可追溯的事实与偏好：后台提炼、跨会话召回、自然更正旧表述、显式遗忘防止旧内容回写；每条事实附原话依据，不代表已核实的外部真相 | 现有文字模型与已授权的记忆空间即可，无独立云记忆服务；首批仅覆盖主人私聊与眼镜，控制台/CLI/群聊不做自动提炼，也不回填历史记录 |
-| 主动探索 | 兴趣、真实搜索与阅读（含 Bilibili 公开视频页的只读发现）、候选草稿、静默时段、配额、退避、定期 worker、暂停 | 定期探索默认关闭；外发另需已绑定的渠道派发器 |
-| QQ 与表达 | 群聊/私聊、人格卡、分段回复、主动问候；群聊主动插话由意图模型按语义选择回应或旁观 | 依赖已配置的 QQ/WeQ 渠道，语义参与需配置意图模型；发送状态以真实回执为准 |
-| 天气与情境 | QWeather 实况与预报、位置上下文、搜索回退 | 配置和风 API 或搜索提供方；无位置时使用已配置的默认城市 |
-| 眼镜后端 | 手机可信身份（令牌认证、主人绑定）、`/v1/chat`（companion/quick 两种模式，并行第二条经 `/v1/chat/followup` 长轮询）、上下文与手机日程快照同步（有事件/无事件/不可读三态）、结果投递（文字/图片，TTS 语音可发成 QQ 语音消息）、RayNeo 采集/查询/控制接口 | 手机桥接客户端与眼镜端凭证 |
-| 设备与自主体 | 设备配对、权限视图、实时观察、动作回执；Android observe → decide → control/shell 编排器 | 设备端执行在 whale-mobile；自主体循环已有代码与模拟测试，生产接线及 Root 真机完整联调仍待完成 |
-| 结果投递 | 文字/图片向 QQ 私聊投递、眼镜接口可调用；离线结果暂存 | 手机系统图库正式写入未接通，服务器暂存不等于送达手机 |
-| 受控终端 | 分级授权：personal 档下主人自由命令免逐次审批，其他成员默认不放行；Linux Bubblewrap 沙箱隔离执行，工作目录、输出与资源均有边界；细节见 [Shell 沙箱](docs/shell-sandbox.md) | 非 root、可用的 Bubblewrap + prlimit；不可用时拒绝执行 |
-| 备份与恢复 | JSONL 记忆交换、完整 SQLite 备份/恢复 | 恢复前停止服务；完整配置和媒体还需备份数据目录 |
-
-控制台包含十二个页面：运行总览、与鲸鱼对话、工作台、插件与能力、记忆空间、任务中心、主动行为、待办审批、运行日志、媒体与语音、探索与工作流、设置与诊断。页面按需加载并支持手机布局；保存配置和批准操作都以服务器实际结果为准。
-
-## 结构与技术栈
-
-| 层 | 实际实现 | 主要技术 |
-| --- | --- | --- |
-| 核心对话与任务 | `src/whale_core/core/`、`life/` | Python 3.11+、OpenAI 兼容 HTTP API、异步任务编排 |
-| 记忆 | `memory/` | SQLite；可选 embedding 与关键词融合 |
-| 工具与外部能力 | `plugins/`、`cloud/` | 插件接口、HTTP、Shell 与模型工具调用 |
-| 设备管理 | `devices/`、`api/devices_api.py` | Ed25519、WebSocket、V2 协议、回执与持久化记录 |
-| 眼镜与手机服务 | `api/glasses.py`、`api/rayneo_http.py` | 令牌认证、并行跟进链路、日程快照、统一结果投递 |
-| 管理界面 | `api/`、`web/` | Python 服务端、React / TypeScript |
-| 手机执行端 | [whale-mobile](https://github.com/amwangfan/whale-mobile) | Kotlin、Android 前台服务、Flutter |
-
-设备接口与契约见[设备文档](docs/devices.md)。
-
-## 后续计划
-
-- 扩大主人事实记忆的类型覆盖，并建立长期质量评测
-- 手机系统图库的正式写入
-- ADB/SSH 与 WSS 的统一生产动作入口，以及跨设备的统一任务调度
-- 眼镜真机显示与绘制回执闭环
-- 专用 Root 手机连续应用操作的完整真机联调
-- PCM 通话中继与真实音频桥的联调
-- Windows 桌面端；macOS 签名、公证与真实图形环境验收
-
-## 从源码开始
-
-需要 Python 3.11+；构建前端使用 Node 24 和 pnpm 12。
+需要 Python 3.11+。控制台无需 Node 构建。
 
 ```bash
 git clone https://github.com/amwangfan/whale-core.git
 cd whale-core
-python -m pip install -e ".[dev,voice]"
-pnpm -C web install --frozen-lockfile
-pnpm -C web build
-whale api
+python -m pip install -e ".[dev]"
+whale serve            # 打印控制台地址与访问令牌
 ```
 
-打开终端显示的本机地址（默认 http://127.0.0.1:8080），粘贴首次生成的访问 token，然后在「设置与诊断」填写模型端点、名称和密钥，点击保存、测试连接。token 保存在配置目录的 `api_token`，不会放进网页 URL。
-
-文字模型没有厂商绑定。默认 `local` 档指向 `http://127.0.0.1:11434/v1`，请在设置中填写本地实际安装的模型名；`cloud` 档默认 DeepSeek，也可改成其他兼容服务。项目不会替你下载或启动模型。
-
-命令行用法：
+打开 http://127.0.0.1:8080 ，粘贴令牌，在 **设置 → 模型** 添加一个 OpenAI 兼容服务（DeepSeek、通义、Ollama、vLLM…），为 `chat` 角色选择模型并测试连接。`fast` 角色（记忆提取、关系判断）可选配一个更便宜的模型；`embedding` 角色配置后启用语义检索。
 
 ```bash
-whale setup --profile local
-whale doctor
-whale run
-whale plugins list
-whale memory backup /private/backups/whale.sqlite3
+whale doctor           # 检查环境与模型
+whale token --rotate   # 轮换访问令牌
+whale --data D:/whale serve --port 9000
 ```
 
-`cloud` 档的命令行初始化需要先设置 `DEEPSEEK_API_KEY`；网页首次设置可以直接保存私密凭据。新配置目录默认 `~/.whale`，也可给命令增加 `--config-dir PATH`。同一数据目录同时只允许一个服务实例。
+数据默认在 `~/.whale/`：`config.json`（可见配置）、`secrets.json`（密钥，权限 600）、`whale.db`（SQLite：记忆、对话、Run、任务、事件日志）、`artifacts/`。
 
-## 安装包、桌面与容器
+## 结构
 
-带控制台的 wheel 可在没有 Node 的机器上运行，并带上官方插件与内置工作流；Linux/macOS 也有免 Python 可执行构建。
+```
+src/whale/
+  kernel/        ID · 错误模型 · 事件总线与事件日志 · SQLite 与迁移 · 配置 · 产物
+  models/        OpenAI 兼容（流式、工具调用、无工具模型自动降级）· 离线大脑 · 角色路由与预算
+  memory/        存储（FTS5 + 关系边 + 向量）· 提取 / 整理 / 检索 / 遗忘
+  capabilities/  能力规范 · 注册表 · 策略与审批 · 内置能力
+  agent/         人格 · 对话 / Run / Step 记录 · 运行时（唯一的 Agent 循环）
+  tasks/         目标任务与子 Agent · 唯一调度器（cron / 周期 / 一次性）
+  autonomy/      探索 · 主动消息闸门
+  plugins/       插件管理 · 官方插件（天气、QQ、媒体）
+  devices/       设备注册与配对 · V2 设备链路 · 设备能力桥
+  link/          Link v1 协议：信封、RPC 注册表、连接中枢
+  channels/      Channel 抽象与 IO 渠道（onebot/QQ）：入站规范化 · 出站回执 · 昵称目录
+  server/        Starlette：/api/rpc · /api/link · /api/events · 控制台静态文件
+web/             控制台（ES Modules + Preact/htm，无构建步骤）
+contracts/device/  whale-mobile 设备协议镜像（信封 1.x，路径无版本）
+tests/           单元与集成测试（pytest / unittest）
+```
+
+## 开发
 
 ```bash
-# 仓库内构建并验证带控制台的 wheel
-python scripts/build_release.py
-python scripts/verify_wheel.py dist/*.whl
-
-# 桌面：可选原生窗口；缺少窗口依赖时使用系统浏览器
-whale desktop
-# 或 whale desktop --browser
-
-# Linux 云端/本机服务：默认只向本机映射端口
-# docker compose up --build -d
+python -m pytest -q
 ```
 
-原生窗口需要 `desktop` 可选依赖和系统 WebView。免 Python 可执行（PyInstaller）默认用系统浏览器；Linux/macOS 的 wheel 与冻结包由 GitHub CI 构建并通过独立启动检查。构建、菜单入口、容器、升级、日志和备份步骤见[部署说明](docs/deployment.md)与[桌面说明](docs/packaging-desktop.md)。
-
-## 数据、授权与运行状态
-
-管理 API 使用 Bearer 鉴权，默认监听本机；公网部署按[部署说明](docs/deployment.md)配置 HTTPS。模型端点、密钥、记忆和产物存放在用户的本地配置/数据目录，相关设置可以在网页控制台调整。记忆支持浏览、导出和删除。
-
-鲸鱼在用户授予的权限内自主行动。日常手机的感知与操作按设备 scope 和授权状态执行；专用 Root 手机在启用模块与持续 Root 授权后支持 Shell、观察和界面操作。服务器的 Shell 沙箱是另一条独立的执行路径，与 Android Root 权限互不相干。
-
-任务面板区分执行成功、失败与结果未知等状态；批准代表允许执行，不保证外部操作已经完成。原始语音、截图及媒体产物的实际处理方式见[能力配置](docs/media-and-voice.md)和[设备文档](docs/devices.md)。
-
-## 开发文档
-
-文档入口与完整清单见 [docs/README.md](docs/README.md)。
-
-- [管理 API](docs/management-api.md)
-- [设备与意图契约](docs/contracts.md)
-- [能力与语音配置](docs/media-and-voice.md)
-- [Shell 沙箱](docs/shell-sandbox.md)
-- [主人长期记忆](docs/owner-fact-memory.md)
-- [贡献指南](CONTRIBUTING.md)
+设计原则、模块边界与扩展方式见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。旧版（v2）代码保存在 `legacy/`，仅供移植参考，不参与运行，将在移植完成后删除。
