@@ -1,0 +1,17 @@
+{
+  "id": "media",
+  "name": "生图与语音",
+  "version": "1.0.0",
+  "description": "文生图与语音合成：支持 OpenAI 兼容接口与阿里云 DashScope，生成的文件保存为附件，可在控制台查看或下载。",
+  "icon": "🎨",
+  "entry": "plugin.py",
+  "default_enabled": false,
+  "config": {
+    "provider": {"type": "string", "title": "服务商", "description": "openai：OpenAI 兼容接口；dashscope：阿里云百炼 / DashScope", "default": "openai", "enum": ["openai", "dashscope"]},
+    "base_url": {"type": "string", "title": "接口地址", "description": "留空使用服务商默认地址（OpenAI: https://api.openai.com/v1；DashScope: https://dashscope.aliyuncs.com/api/v1）", "default": ""},
+    "image_model": {"type": "string", "title": "生图模型", "description": "留空使用默认（gpt-image-1 / qwen-image-3.0）", "default": ""},
+    "tts_model": {"type": "string", "title": "语音模型", "description": "留空使用默认（gpt-4o-mini-tts / qwen-audio-3.0-tts-flash）", "default": ""},
+    "voice": {"type": "string", "title": "默认音色", "description": "留空使用默认（alloy / longanfengyue）", "default": ""}
+  },
+  "secrets": {"api_key": "API Key"}
+}

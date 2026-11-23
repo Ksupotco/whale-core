@@ -1,0 +1,14 @@
+{
+  "id": "qweather",
+  "name": "和风天气",
+  "version": "1.0.0",
+  "description": "通过和风天气（QWeather）查询城市实时天气与未来 3 天预报。",
+  "icon": "🌤️",
+  "entry": "plugin.py",
+  "default_enabled": false,
+  "config": {
+    "api_host": {"type": "string", "title": "API Host", "description": "控制台分配的专属域名，例如 abc1234xyz.re.qweatherapi.com", "default": ""},
+    "default_city": {"type": "string", "title": "默认城市", "description": "未指明地点时查询的城市", "default": ""}
+  },
+  "secrets": {"key": "API KEY"}
+}

@@ -1,0 +1,22 @@
+{
+  "id": "qq",
+  "name": "QQ",
+  "version": "1.0.0",
+  "description": "通过 OneBot v11（NapCat / LLOneBot 等）把 QQ 接入同一个 Agent：私聊、群聊（@ 或智能判断）、主动通知主人。",
+  "icon": "🐧",
+  "entry": "plugin.py",
+  "default_enabled": false,
+  "config": {
+    "api_base": {"type": "string", "title": "OneBot HTTP API", "description": "协议端 HTTP API 地址，例如 http://127.0.0.1:3000", "default": ""},
+    "owner_qq": {"type": "string", "title": "主人 QQ", "description": "主人的 QQ 号；私聊按主人身份对话，通知也发到这里", "default": ""},
+    "bot_qq": {"type": "string", "title": "机器人 QQ", "description": "可选；不填则从事件的 self_id 自动识别", "default": ""},
+    "group_mode": {"type": "string", "title": "群聊模式", "description": "off：不参与群聊；mention：只回应 @ 或引用；smart：另外由快速模型判断是否值得插话", "default": "mention", "enum": ["off", "mention", "smart"]},
+    "allowed_groups": {"type": "array", "title": "允许的群", "description": "群号列表；留空表示所有群", "default": []},
+    "reply_split": {"type": "boolean", "title": "分条发送", "description": "把较长的回复按自然段拆成 2-3 个气泡", "default": true},
+    "bubble_delay_ms": {"type": "integer", "title": "气泡间隔(毫秒)", "description": "分条发送时相邻气泡的基础间隔", "default": 800},
+    "smart_cooldown_s": {"type": "integer", "title": "插话冷却(秒)", "description": "smart 模式下两次主动插话的最短间隔", "default": 120},
+    "judge_interval_s": {"type": "integer", "title": "判断间隔(秒)", "description": "smart 模式下同一个群两次调用判断模型的最短间隔", "default": 15},
+    "ws_url": {"type": "string", "title": "正向 WebSocket", "description": "可选：协议端正向 WS 地址（如 ws://127.0.0.1:3001）；配置后从 WS 收事件，未配置 HTTP API 时也经 WS 发消息", "default": ""}
+  },
+  "secrets": {"access_token": "OneBot Access Token"}
+}
