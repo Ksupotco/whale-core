@@ -66,7 +66,7 @@ src/whale/
   plugins/       插件管理 · 官方插件（天气、QQ、媒体）
   devices/       设备注册与配对 · V2 设备链路 · 设备能力桥
   link/          Link v1 协议：信封、RPC 注册表、连接中枢
-  channels/      Channel 抽象与 IO 渠道（onebot/QQ）：入站规范化 · 出站回执 · 昵称目录
+  channels/      Channel 抽象与 IO 渠道：QQ 语义层（backend 可选 onebot/weq）· 入站规范化 · 出站回执 · 昵称目录
   server/        Starlette：/api/rpc · /api/link · /api/events · 控制台静态文件
 web/             控制台（ES Modules + Preact/htm，无构建步骤）
 contracts/device/  whale-mobile 设备协议镜像（信封 1.x，路径无版本）

@@ -58,7 +58,7 @@ src/whale/
   autonomy/      explorer(兴趣→搜索→阅读→日记/候选知识) · proactive(主动消息策略)
   link/          envelope · rpc(方法注册，REST 与 WS 共用) · hub(连接、订阅、能力声明)
   devices/       registry(配对/Ed25519/scope) · v2(与 whale-mobile V2 线协议的边缘适配)
-  channels/      Channel 抽象 · onebot(QQ)
+  channels/      Channel 抽象 · QQ 渠道（backend：onebot / weq，config 驱动）
   server/        Starlette 应用：/api/rpc、/api/link(WS)、/api/events(SSE)、静态控制台
 web/             无构建步骤的控制台（ES Modules + Preact/htm，随 Python 包分发）
 ```

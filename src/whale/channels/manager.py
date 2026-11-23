@@ -19,11 +19,22 @@ from ..kernel.errors import WhaleError
 from ..link.protocol import Client, NoParams
 from .base import Channel, CoreSink
 from .onebot import OneBotChannel
+from .qq import QQChannel
+from .weq import WeQChannel
 
 log = logging.getLogger("whale.channels")
 
-# kind 缺省回退到渠道 id：id 为 "qq" 的渠道不写 kind 即按 onebot 处理。
-KINDS: dict[str, type[Channel]] = {"onebot": OneBotChannel, "qq": OneBotChannel}
+# kind 缺省回退到渠道 id。kind="qq" 由 config.backend 选实现（onebot 默认 | weq）；
+# "onebot"/"weq" 作为 kind 直写等价于固定 backend 的 qq。
+KINDS: dict[str, type[Channel]] = {"onebot": OneBotChannel, "qq": QQChannel, "weq": WeQChannel}
+BACKENDS: dict[str, type[Channel]] = {"onebot": OneBotChannel, "weq": WeQChannel}
+
+
+def resolve_class(cid: str, cfg: dict[str, Any]) -> type[Channel] | None:
+    kind = str(cfg.get("kind") or cid)
+    if kind == "qq":
+        return BACKENDS.get(str(cfg.get("backend") or "onebot"))
+    return KINDS.get(kind)
 
 
 class Channels:
@@ -69,10 +80,11 @@ class Channels:
 
     async def _open(self, cid: str, cfg: dict[str, Any]) -> None:
         kind = str(cfg.get("kind") or cid)
-        cls = KINDS.get(kind)
+        cls = resolve_class(cid, cfg)
         if cls is None:
-            self._errors[cid] = f"unknown channel kind: {kind}"
-            log.warning("channel %s: unknown kind %s", cid, kind)
+            self._errors[cid] = f"unknown channel kind: {kind}" + (
+                f" backend: {cfg.get('backend')}" if kind == "qq" else "")
+            log.warning("channel %s: %s", cid, self._errors[cid])
             return
         sink = CoreSink(self.app, cid)
         try:

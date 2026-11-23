@@ -7,7 +7,10 @@
 
 from .base import Channel, CoreSink, PluginSink, Sink
 from .manager import Channels
-from .onebot import NameDirectory, OneBotChannel, clean_name, validate_endpoints
+from .onebot import OneBotChannel, validate_endpoints
+from .qq import NameDirectory, QQChannel, QQEvent, clean_name
+from .weq import WeQChannel
 
 __all__ = ["Channel", "Channels", "CoreSink", "PluginSink", "Sink",
-           "NameDirectory", "OneBotChannel", "clean_name", "validate_endpoints"]
+           "NameDirectory", "OneBotChannel", "QQChannel", "QQEvent", "WeQChannel",
+           "clean_name", "validate_endpoints"]
