@@ -1,12 +1,26 @@
 <!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Whale 控制台</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+<html lang="zh-CN" data-theme="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#061224" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f4f8fb" media="(prefers-color-scheme: light)">
+  <meta name="referrer" content="no-referrer">
+  <title>鲸鱼 · Whale 控制台</title>
+  <link rel="icon" type="image/svg+xml" href="/app/icon.svg">
+  <link rel="stylesheet" href="/app/styles.css">
+  <link rel="modulepreload" href="/vendor/preact-htm.js">
+  <link rel="modulepreload" href="/app/main.js">
+  <script type="module" src="/app/main.js"></script>
+</head>
+<body>
+  <div id="app" class="boot" aria-live="polite">
+    <div class="boot-splash" role="status">
+      <div class="boot-orb" aria-hidden="true"></div>
+      <p>正在唤醒鲸鱼…</p>
+    </div>
+  </div>
+  <noscript><p class="noscript">Whale 控制台需要启用 JavaScript。</p></noscript>
+</body>
 </html>

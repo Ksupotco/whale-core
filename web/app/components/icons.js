@@ -1,0 +1,90 @@
+// @ts-check
+/** Inline SVG icon set (stroke icons on a 24px grid). Usage: html`<${Icon} name="memory" />`. */
+import { h } from '/vendor/preact-htm.js';
+
+/** @type {Record<string, string[]>} path data per icon (each string is one <path d>) */
+const P = {
+  bridge: ['M3 12a9 9 0 1 0 18 0a9 9 0 1 0-18 0', 'M12 7v5l3 2'],
+  home: ['M3 11l9-7 9 7', 'M5 10v10h14V10'],
+  chat: ['M4 5h16v11H8l-4 4z'],
+  memory: ['M12 3a4 4 0 0 0-4 4v.5A3.5 3.5 0 0 0 5 11a3.5 3.5 0 0 0 1.5 6.5A3.5 3.5 0 0 0 12 21a3.5 3.5 0 0 0 5.5-3.5A3.5 3.5 0 0 0 19 11a3.5 3.5 0 0 0-3-3.5V7a4 4 0 0 0-4-4z', 'M12 3v18'],
+  tasks: ['M9 6h11', 'M9 12h11', 'M9 18h11', 'M4 6l1 1 2-2', 'M4 12l1 1 2-2', 'M4 18l1 1 2-2'],
+  bolt: ['M13 2L4 14h7l-1 8 9-12h-7z'],
+  phone: ['M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z', 'M11 18h2'],
+  user: ['M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z', 'M4 21a8 8 0 0 1 16 0'],
+  gear: ['M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z', 'M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z'],
+  shield: ['M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z', 'M9 12l2 2 4-4'],
+  bell: ['M6 8a6 6 0 1 1 12 0c0 7 3 8 3 8H3s3-1 3-8', 'M10 20a2 2 0 0 0 4 0'],
+  search: ['M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z', 'M21 21l-5-5'],
+  plus: ['M12 5v14', 'M5 12h14'],
+  x: ['M6 6l12 12', 'M18 6L6 18'],
+  check: ['M5 12l5 5 9-10'],
+  alert: ['M12 3l10 18H2z', 'M12 10v4', 'M12 17.5v.5'],
+  info: ['M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z', 'M12 11v6', 'M12 7.5v.5'],
+  play: ['M7 4l13 8-13 8z'],
+  stop: ['M6 6h12v12H6z'],
+  send: ['M4 12l16-8-6 16-2-7z'],
+  image: ['M4 5h16v14H4z', 'M4 16l5-5 4 4 3-3 4 4', 'M15.5 9.5h.01'],
+  edit: ['M4 20h4L19 9l-4-4L4 16z', 'M13 7l4 4'],
+  trash: ['M4 7h16', 'M9 7V4h6v3', 'M6 7l1 13h10l1-13'],
+  archive: ['M3 5h18v4H3z', 'M5 9v11h14V9', 'M10 13h4'],
+  up: ['M12 19V5', 'M6 11l6-6 6 6'],
+  down: ['M12 5v14', 'M6 13l6 6 6-6'],
+  chevron: ['M9 6l6 6-6 6'],
+  chevronDown: ['M6 9l6 6 6-6'],
+  left: ['M15 6l-6 6 6 6'],
+  menu: ['M4 6h16', 'M4 12h16', 'M4 18h16'],
+  sun: ['M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10z', 'M12 1v2', 'M12 21v2', 'M4.2 4.2l1.4 1.4', 'M18.4 18.4l1.4 1.4', 'M1 12h2', 'M21 12h2', 'M4.2 19.8l1.4-1.4', 'M18.4 5.6l1.4-1.4'],
+  moon: ['M21 13A9 9 0 1 1 11 3a7 7 0 0 0 10 10z'],
+  auto: ['M12 3a9 9 0 1 0 0 18z', 'M12 3a9 9 0 0 1 0 18'],
+  spark: ['M12 3v4', 'M12 17v4', 'M3 12h4', 'M17 12h4', 'M6 6l2.5 2.5', 'M15.5 15.5L18 18', 'M6 18l2.5-2.5', 'M15.5 8.5L18 6'],
+  sparkles: ['M12 3l1.8 4.7L18 9.5l-4.2 1.8L12 16l-1.8-4.7L6 9.5l4.2-1.8z', 'M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z'],
+  branch: ['M6 3v12', 'M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6z', 'M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6z', 'M18 9a9 9 0 0 1-9 9'],
+  list: ['M8 6h13', 'M8 12h13', 'M8 18h13', 'M3 6h.01', 'M3 12h.01', 'M3 18h.01'],
+  note: ['M5 3h10l4 4v14H5z', 'M14 3v5h5'],
+  clock: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M12 7v5l3 3'],
+  flag: ['M5 21V4', 'M5 4h12l-2 4 2 4H5'],
+  link: ['M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1', 'M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1'],
+  unlink: ['M18 13l2-2a5 5 0 0 0-7-7l-2 2', 'M6 11l-2 2a5 5 0 0 0 7 7l2-2', 'M3 3l18 18'],
+  eye: ['M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z', 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z'],
+  lock: ['M5 11h14v10H5z', 'M8 11V7a4 4 0 0 1 8 0v4'],
+  compass: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M15.5 8.5l-2 5-5 2 2-5z'],
+  plug: ['M9 2v6', 'M15 2v6', 'M6 8h12v4a6 6 0 0 1-12 0z', 'M12 18v4'],
+  power: ['M12 2v10', 'M6.3 6.3a8 8 0 1 0 11.4 0'],
+  swap: ['M7 7h13l-4-4', 'M17 17H4l4 4'],
+  broom: ['M14 4l6 6', 'M12 6l6 6-7 7H5v-6z', 'M8 16l2 2'],
+  dot: ['M12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2z'],
+  wifi: ['M2 9a15 15 0 0 1 20 0', 'M5 12.5a10 10 0 0 1 14 0', 'M8.5 16a5 5 0 0 1 7 0', 'M12 19.5h.01'],
+  battery: ['M3 7h16v10H3z', 'M21 10v4'],
+  key: ['M15 7a4 4 0 1 1-3.5 6L4 20.5V17h3v-3h3l1.5-1.5', 'M16 7h.01'],
+  back: ['M9 14L4 9l5-5', 'M4 9h11a5 5 0 0 1 0 10h-3'],
+  refresh: ['M21 12a9 9 0 1 1-3-6.7L21 8', 'M21 3v5h-5'],
+  download: ['M12 3v12', 'M7 10l5 5 5-5', 'M5 21h14'],
+  upload: ['M12 21V9', 'M7 14l5-5 5 5', 'M5 3h14'],
+  copy: ['M8 8h12v12H8z', 'M4 16V4h12'],
+  external: ['M14 4h6v6', 'M20 4l-9 9', 'M18 14v6H4V6h6'],
+  graph: ['M6 6a2 2 0 1 0 0-.01', 'M18 7a2 2 0 1 0 0-.01', 'M12 18a2 2 0 1 0 0-.01', 'M7.5 7l3.5 9', 'M16.5 8.5L13 16.5', 'M8 6h8'],
+  rows: ['M4 5h16v4H4z', 'M4 11h16v4H4z', 'M4 17h16v2H4z'],
+  inbox: ['M3 13l3-8h12l3 8v6H3z', 'M3 13h5l1 3h6l1-3h5'],
+  command: ['M9 6v12', 'M15 6v12', 'M6 9h12', 'M6 15h12', 'M6 9a3 3 0 1 1 3-3', 'M18 9a3 3 0 1 0-3-3', 'M6 15a3 3 0 1 0 3 3', 'M18 15a3 3 0 1 1-3 3'],
+  filter: ['M3 5h18l-7 8v6l-4 2v-8z'],
+  wave: ['M2 12c2.5-4 5-4 7.5 0s5 4 7.5 0 3.5-3 5-1'],
+  fit: ['M4 9V4h5', 'M15 4h5v5', 'M20 15v5h-5', 'M9 20H4v-5'],
+  zoomIn: ['M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z', 'M21 21l-5-5', 'M11 8v6', 'M8 11h6'],
+  zoomOut: ['M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z', 'M21 21l-5-5', 'M8 11h6'],
+  logout: ['M15 4h4v16h-4', 'M10 8l-4 4 4 4', 'M6 12h10'],
+};
+
+/**
+ * @param {{name: string, size?: number, class?: string, title?: string, stroke?: number}} props
+ */
+export function Icon({ name, size = 18, class: cls = '', title, stroke = 1.8 }) {
+  const paths = P[name] || P.dot;
+  return h('svg', {
+    class: `icon ${cls}`, width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+    'stroke-width': stroke, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': title ? undefined : 'true',
+    role: title ? 'img' : undefined, focusable: 'false',
+  }, title ? h('title', null, title) : null, paths.map((d, i) => h('path', { key: i, d })));
+}
+
+export const ICON_NAMES = Object.keys(P);
