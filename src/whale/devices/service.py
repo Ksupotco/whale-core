@@ -42,6 +42,7 @@ _RUN_RE = re.compile(r"^run_[0-9A-HJKMNP-TV-Z]{26}$")
 _TASK_RE = re.compile(r"^task_[0-9A-HJKMNP-TV-Z]{26}$")
 _OBS_RE = re.compile(r"^obs_[0-9A-HJKMNP-TV-Z]{26}$")
 NOTIFY_TTL_MS = {"chat.message": 3600_000, "approval.requested": 600_000}
+LINK_TICKET_TTL_S = 900  # Link 票有效期（C 鉴权）；绑 device_id，撤销即失效
 _KIND_CATEGORY = {"task": "task.completed", "approval": "approval.requested", "reminder": "reminder.triggered",
                   "message": "chat.message"}
 OUTPUT_PAGE = 48 * 1024
@@ -179,7 +180,8 @@ class DeviceService:
         from starlette.routing import Route, WebSocketRoute
 
         return [WebSocketRoute(WS_PATH, self.gateway.endpoint),
-                Route("/api/devices/pair", self._http_redeem, methods=["POST"])]
+                Route("/api/devices/pair", self._http_redeem, methods=["POST"]),
+                Route("/api/devices/link_ticket", self._http_link_ticket, methods=["POST"])]
 
     # -- views ------------------------------------------------------------------------------------
     def _view(self, rec: dict[str, Any]) -> dict[str, Any]:
@@ -254,9 +256,16 @@ class DeviceService:
         rec = self.registry.revoke(self._resolve(ref)["id"])
         kicked = await self.gateway.kick(rec["id"], "device_revoked", "device has been revoked")
         self.app.capabilities.unregister_provider("device:" + rec["id"])
+        # 撤销联动：踢掉该设备持有的 Link 聊天面连接（ticket 校验也随之拒绝）
+        link_kicked = 0
+        for cl in list(self.app.hub.clients.values()):
+            if cl.meta.get("device_id") == rec["id"]:
+                if await self.app.hub.kick_client(cl.id, "device_revoked", "device has been revoked"):
+                    link_kicked += 1
         view = self._view(rec)
-        await self.app.bus.emit("device.revoked", {"device": view, "kicked": kicked})
-        return {**view, "kicked": kicked}
+        await self.app.bus.emit("device.revoked", {"device": view, "kicked": kicked,
+                                                   "link_kicked": link_kicked})
+        return {**view, "kicked": kicked, "link_kicked": link_kicked}
 
     async def rename(self, ref: str, name: str) -> dict[str, Any]:
         rec = self.registry.rename(self._resolve(ref)["id"], name)
@@ -724,6 +733,91 @@ class DeviceService:
         except WhaleError as exc:
             return self._fail(exc)
         out = {"device_id": view["id"], "name": view["name"], "scopes": view["scopes"], "ws_path": WS_PATH}
+        return self._json({"ok": True, "result": out})
+
+    # -- Link ticket（C 鉴权：设备线先验 → 签短期 Link 票；主 token 不上机） ------------------------
+    #
+    # POST /api/devices/link_ticket，仅签名头（§11 同构）：
+    #   X-Whale-Device-Id（32-hex）/ X-Whale-Timestamp（Unix 秒，±300s）/
+    #   X-Whale-Nonce（16..128，5min 防重放）/ X-Whale-Signature（Ed25519 对
+    #   "device_id\nts\nnonce\nPOST\n/api/devices/link_ticket" 的 UTF-8 签名，128-hex）。
+    # ticket 900s 有效、绑 device_id、可复用（重连）；撤销设备即刻失效（hello 拒绝 + 在线踢线）。
+
+    def mint_link_ticket(self, device_id: str) -> dict[str, Any]:
+        import secrets as pysecrets
+
+        from ..kernel.ids import now_ms
+
+        ticket = pysecrets.token_urlsafe(32)
+        self.app.db.kv_set("link_ticket", ticket,
+                           {"device_id": device_id, "expires_at": now_ms() + LINK_TICKET_TTL_S * 1000})
+        return {"ticket": ticket, "expires_in": LINK_TICKET_TTL_S, "device_id": device_id}
+
+    def validate_link_ticket(self, ticket: str) -> str:
+        """ticket → device_id；无效/过期/设备撤销一律 unauthorized（fail-closed）。"""
+        from ..kernel.ids import now_ms
+
+        rec = self.app.db.kv_get("link_ticket", str(ticket or ""))
+        if not isinstance(rec, dict) or int(rec.get("expires_at") or 0) < now_ms():
+            raise WhaleError("unauthorized", "invalid or expired link ticket")
+        device_id = str(rec.get("device_id") or "")
+        dev = self.registry.get(device_id)
+        if dev is None or dev["revoked"]:
+            raise WhaleError("unauthorized", "device revoked or unknown")
+        return device_id
+
+    def _verify_device_headers(self, request: Any, path: str) -> str:
+        """§11 设备签名头校验（fail-closed 401）。返回 device_id。"""
+        import re
+        import time
+
+        from ..kernel.ids import now_ms
+        from .gateway import verify_ed25519
+
+        h = request.headers
+        device_id = (h.get("x-whale-device-id") or "").strip().lower()
+        ts_raw = (h.get("x-whale-timestamp") or "").strip()
+        nonce = (h.get("x-whale-nonce") or "").strip()
+        sig = (h.get("x-whale-signature") or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{32}", device_id):
+            raise WhaleError("unauthorized", "bad device id")
+        try:
+            ts = int(ts_raw)
+        except ValueError:
+            raise WhaleError("unauthorized", "bad timestamp") from None
+        if abs(time.time() - ts) > 300:
+            raise WhaleError("unauthorized", "stale timestamp")
+        if not (16 <= len(nonce) <= 128):
+            raise WhaleError("unauthorized", "bad nonce")
+        if not re.fullmatch(r"[0-9a-f]{128}", sig):
+            raise WhaleError("unauthorized", "bad signature")
+        rec = self.registry.get(device_id)
+        if rec is None:
+            raise WhaleError("unauthorized", "unknown device")
+        if rec["revoked"]:
+            raise WhaleError("unauthorized", "device revoked")
+        nkey = f"{device_id}:{nonce}"
+        if self.app.db.kv_get("lt_nonce", nkey) is not None:
+            raise WhaleError("unauthorized", "nonce replay")
+        message = f"{device_id}\n{ts_raw}\n{nonce}\n{request.method}\n{path}"
+        if not verify_ed25519(rec["pubkey"], sig, message):
+            raise WhaleError("unauthorized", "signature verification failed")
+        self.app.db.kv_set("lt_nonce", nkey, now_ms())
+        # 顺手清扫过期 nonce（5min 窗）
+        for key, seen_at in self.app.db.kv_all("lt_nonce").items():
+            try:
+                if now_ms() - int(seen_at) > 300_000:
+                    self.app.db.kv_delete("lt_nonce", key)
+            except (TypeError, ValueError):
+                self.app.db.kv_delete("lt_nonce", key)
+        return device_id
+
+    async def _http_link_ticket(self, request: Any) -> Any:
+        try:
+            device_id = self._verify_device_headers(request, "/api/devices/link_ticket")
+            out = self.mint_link_ticket(device_id)
+        except WhaleError as exc:
+            return self._fail(exc)
         return self._json({"ok": True, "result": out})
 
     # -- RPC ----------------------------------------------------------------------------------------------

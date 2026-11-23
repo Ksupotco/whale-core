@@ -67,6 +67,16 @@ class Artifacts:
             return info, self._mem[aid]
         raise not_found("artifact data", aid)
 
+    def delete(self, aid: str) -> None:
+        info = self.get(aid)
+        if info["path"]:
+            try:
+                Path(info["path"]).unlink(missing_ok=True)
+            except OSError:
+                pass
+        self._mem.pop(aid, None)
+        self.db.execute("DELETE FROM artifacts WHERE id=?", (aid,))
+
     def list(self, limit: int = 100) -> list[dict[str, Any]]:
         rows = self.db.query("SELECT id FROM artifacts ORDER BY created_at DESC LIMIT ?", (limit,))
         return [self.get(r[0]) for r in rows]

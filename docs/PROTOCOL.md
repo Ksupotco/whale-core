@@ -9,12 +9,20 @@ Core 与所有客户端（控制台、手机 App、眼镜桥、IO 渠道桥、�
 | WebSocket | `ws(s)://<host>/api/link` | 长连接：RPC 双向调用 + 事件推送 + 能力声明 |
 | HTTP | `POST /api/rpc/{method}` | 与 WS 相同的方法，适合脚本和无长连接的端 |
 | SSE | `GET /api/events?topics=run.*,notify` | 只读事件流 |
-| SSE | `POST /api/chat/stream` | 单轮对话流式输出（`run` / `step` / `delta` / `done` 事件） |
+| SSE | `POST /api/chat/stream` | 单轮对话流式输出（`run` / `step` / `delta` / `done` 事件；鉴权同 Link：Bearer 或 `X-Whale-Link-Ticket` 票头，票据来源默认 channel=mobile） |
 | HTTP | `GET /api/schema` | 全部方法与参数 JSON Schema，客户端可据此生成类型 |
-| HTTP | `GET /api/artifacts/{id}` | 生成的图片/音频等产物（需鉴权） |
+| HTTP | `GET /api/artifacts/{id}` · `POST /api/artifacts` · `DELETE /api/artifacts/{id}` | 产物/附件（需鉴权：Bearer 或 Link ticket；POST raw body + `X-Whale-Name`/`X-Whale-Content-Type` 头 → 201 含 sha256） |
 | WebSocket | `/api/devices/ws` | whale-mobile 设备身体（设备线协议，Ed25519 设备身份；见 `contracts/device/`） |
 
 鉴权：`Authorization: Bearer <token>`；WS 在 hello 的 `token` 字段或 `?token=` 携带。token 由 `whale token` 查看/轮换。
+手机聊天面另可用 **Link ticket**（主 token 不上机）：设备线先验 → `POST /api/devices/link_ticket`
+（§11 同构签名头，见 `contracts/device/`）→ `{ticket, expires_in:900}`；hello 带 `ticket` 字段
+（固定 role=mobile、绑 device_id、撤销设备即拒绝+在线踢线）。artifacts 面（`GET/POST/DELETE
+/api/artifacts`）同样接受 ticket（`X-Whale-Link-Ticket` 头或 `?ticket=`）。
+
+约束：Link 单帧 ≤ 1 MiB（超限回 `error{code:"invalid_params", message:"frame too large"}`，连接保持）；
+大负载一律走 `/api/artifacts/{id}` 引用拉取，不在控制通道串送。服务端无强制心跳：客户端自行
+30s `ping` 保活，断线即离线（不重放事件；重连后用 `conversations.messages` / `events.query` 补齐）。
 
 ## 2. 信封
 
@@ -39,6 +47,12 @@ Core 与所有客户端（控制台、手机 App、眼镜桥、IO 渠道桥、�
 ```
 
 - `role`：`console` | `mobile` | `glasses` | `bridge` | `cli`（用作对话渠道名）。
+- **role 方法列管**：`glasses` 角色只能调用白名单方法（`chat.send/cancel`、
+  `conversations.list/messages`、`runs.get/list`、`link.subscribe/clients`、`approvals.list/resolve`、
+  `system.status/schema`、`events.query`、`glasses.*`）；`mobile` 角色白名单为 `chat.send/cancel`、
+  `conversations.*`、`runs.get/list`、`link.subscribe/clients`、`approvals.list/resolve`、
+  `system.status/schema`、`events.query`、`personas.list`、`tasks.list/get`、`memory.search`；
+  其余一律 `forbidden`。不在列管表内的角色不受此限（owner/client scope 检查独立于此、先生效）。
 - 客户端声明的能力注册为 `client.<name>.<capability>`，Agent 可直接调用；调用时服务端向客户端发 `rpc.request {method: "capability.invoke", params: {name, args, run_id}}`，客户端回 `rpc.response`。断线即注销。
 - 订阅可随时用 `link.subscribe {patterns}` 替换。
 
@@ -67,8 +81,13 @@ Core 与所有客户端（控制台、手机 App、眼镜桥、IO 渠道桥、�
 | autonomy | `autonomy.status` · `autonomy.explore` |
 | devices | `devices.list/get/pair_start/pair_approve/revoke/rename/set_scopes/set_role/privacy/set_privacy/action/query/notify/events/actions/search_events/digest_now` |
 | link | `link.subscribe` · `link.clients` |
+| glasses | `glasses.context.sync`（日历窗口快照，≤12/日、title≤120、[today,today+7]、calendarHash 幂等）· `glasses.qq_reply`（口述发绑定 owner QQ，目标不从参数推导）· `glasses.deliver`（QQ 优先/通知兜底，图片经 artifact id，音频本期如实 unsupported）· `glasses.schedule.list/candidates/candidate_action/add_item/delete_item/source`（候选两阶段 + 溯源） |
 
 `scope`：多数管理方法要求 owner 身份；`chat.send`、`runs.get`、`system.status` 等标记为 `client` 的方法所有已认证客户端可用。
+
+`chat.send` 可选参：`wait=false` 立即返回 `run_id`（终稿经 `run.completed` 事件到达）；
+`model_role:"fast"` + `remember:false` = 轻量档（fast 角色模型，不召回不回写记忆——眼镜 quick 语义）；
+`conversation_id` 由客户端生成并持有（如 `glasses:<ULID>`），幂等复用。
 
 ## 5. 错误
 

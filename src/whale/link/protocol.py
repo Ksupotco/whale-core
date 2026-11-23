@@ -8,6 +8,7 @@ data structures. ``GET /api/schema`` exports every method's parameter schema.
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
@@ -21,6 +22,38 @@ from ..kernel.ids import now_ms, ulid
 log = logging.getLogger("whale.link")
 
 PROTOCOL = "1.0"
+
+# Per-role method allowlists (owner 令牌即全量权限，角色列管把「客户端令牌泄露 =
+# 全管理面暴露」的残余风险收掉）。不在表内的角色不受限；表内角色只能调用列出的
+# 方法（fnmatch  glob）。owner/client scope 检查独立于此、先生效。
+ROLE_METHODS: dict[str, tuple[str, ...]] = {
+    # 眼镜桥：对话 + 审批 + 上下文/日程/投递 + 观测回放。管理面（config/models/
+    # plugins/memory 写等）一律不给。
+    "glasses": (
+        "chat.send", "chat.cancel",
+        "conversations.list", "conversations.messages",
+        "runs.get", "runs.list",
+        "link.subscribe", "link.clients",
+        "approvals.list", "approvals.resolve",
+        "system.status", "system.schema",
+        "events.query",
+        "glasses.*",
+    ),
+    # 手机聊天面（全功能端）：对话/历史/审批/轨迹/任务只读/人格可见；
+    # 管理面（config/models/plugins/memory 写/policy）一律不给。
+    "mobile": (
+        "chat.send", "chat.cancel",
+        "conversations.*",
+        "runs.get", "runs.list",
+        "link.subscribe", "link.clients",
+        "approvals.list", "approvals.resolve",
+        "system.status", "system.schema",
+        "events.query",
+        "personas.list",
+        "tasks.list", "tasks.get",
+        "memory.search",
+    ),
+}
 
 
 def envelope(type_: str, payload: dict[str, Any] | None = None, corr: str | None = None) -> dict[str, Any]:
@@ -56,6 +89,10 @@ class RpcRegistry:
             raise WhaleError("not_found", f"unknown method {name}")
         if client is not None and m.scope == "owner" and not client.owner:
             raise WhaleError("forbidden", f"{name} requires owner access")
+        if client is not None and client.role in ROLE_METHODS and not any(
+                fnmatch.fnmatchcase(name, p) for p in ROLE_METHODS[client.role]):
+            raise WhaleError("forbidden", f"role {client.role} may not call {name}",
+                             details={"role": client.role})
         try:
             params = m.params.model_validate(raw or {})
         except ValidationError as exc:
@@ -161,6 +198,14 @@ class LinkHub:
         else:
             err = payload.get("error") or {}
             fut.set_exception(WhaleError(err.get("code", "internal"), err.get("message", "client error")))
+
+    async def kick_client(self, client_id: str, code: str, message: str) -> bool:
+        """Server-initiated close: error frame then the writer closes the socket."""
+        client = self.clients.get(client_id)
+        if not client or not client.send:
+            return False
+        await client.send({"__kick__": code, "message": message})
+        return True
 
     # -- delivery -----------------------------------------------------------------
     def add_notifier(self, fn: Callable[[str, str, dict[str, Any]], Awaitable[str | None]]) -> None:

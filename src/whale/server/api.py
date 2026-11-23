@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import fnmatch
+import logging
 import platform
 import time
 from typing import Any, Literal
@@ -21,6 +22,8 @@ from ..kernel.ids import new_id
 from ..link.protocol import PROTOCOL, Client, NoParams
 
 STARTED = time.time()
+
+log = logging.getLogger("whale.server.api")
 
 
 class Id(BaseModel):
@@ -61,6 +64,9 @@ class ChatSend(BaseModel):
     images: list[str] = Field(default_factory=list, max_length=4)
     persona_id: str | None = None
     wait: bool = True
+    # 轻量档（眼镜 quick 语义）：fast 角色模型 + remember=false 时不召回不回写记忆
+    model_role: Literal["chat", "fast"] | None = None
+    remember: bool = True
 
 class RunId(BaseModel):
     run_id: str
@@ -263,12 +269,34 @@ def register(app: Any) -> None:  # noqa: C901 - a flat list of small handlers re
     async def chat_send(p: ChatSend, c: Client | None) -> Any:
         channel = c.role if c else "http"
         conv = app.conversations.ensure(p.conversation_id, channel=channel, persona_id=p.persona_id)
+        # 渠道上下文注入（眼镜日历/位置/天气快照等）：由服务端注册的 provider 供给，
+        # 客户端不能直接传 system_extra（防提示词注入面扩大）。
+        system_extra = ""
+        provider = app.context_providers.get(channel)
+        if provider is not None:
+            try:
+                system_extra = str(provider() or "")
+            except Exception:
+                system_extra = ""
         req = RunRequest(text=p.text, conversation_id=conv["id"], channel=channel, images=p.images,
-                         persona_id=p.persona_id, run_id=new_id("run"))
+                         persona_id=p.persona_id, model_role=p.model_role, remember=p.remember,
+                         system_extra=system_extra, run_id=new_id("run"))
+
+        async def run_then_hook() -> Any:
+            out = await app.agent.run(req)
+            # 渠道后置钩子（眼镜日程候选抽取等；fail-soft，不回溯影响回复）
+            hook = app.turn_hooks.get(channel)
+            if hook is not None and out.status == "completed":
+                try:
+                    hook(p.text, conv["id"])
+                except Exception:
+                    log.exception("turn hook for channel %s failed", channel)
+            return out
+
         if not p.wait:
-            asyncio.create_task(app.agent.run(req))
+            asyncio.create_task(run_then_hook())
             return {"conversation_id": conv["id"], "run_id": req.run_id, "accepted": True}
-        out = await app.agent.run(req)
+        out = await run_then_hook()
         return {"conversation_id": conv["id"], "run_id": out.run["id"], "status": out.status, "text": out.text,
                 "error": out.run.get("error", ""), "memories": [
                     {"id": x["id"], "content": x["content"], "kind": x["kind"], "why": x["why"]} for x in out.memories],

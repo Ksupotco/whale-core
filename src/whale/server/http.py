@@ -54,6 +54,9 @@ def web_root() -> Path | None:
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; "
        "connect-src 'self' ws: wss:; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'")
 
+# Link 单帧上限（字节）：大负载一律走 artifacts/REST，不在控制通道串送。
+LINK_MAX_FRAME_BYTES = 1 * 1024 * 1024
+
 
 class SecurityHeaders:
     """Pure ASGI middleware: strict CSP and friends on every HTTP response."""
@@ -150,9 +153,14 @@ def create_server(app: Any, *, manage_lifecycle: bool = True) -> Starlette:
                                  headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
     async def chat_stream(request: Request) -> Response:
-        """For HTTP-only clients (phones, scripts): one turn, streamed."""
-        if not _token_ok(app, _bearer(request)):
-            return _err(WhaleError("unauthorized", "missing or invalid token"))
+        """For HTTP-only clients (phones, scripts): one turn, streamed.
+
+        F2：除 Bearer 外接受 Link ticket（X-Whale-Link-Ticket 头）——纯 C 部署下手机端
+        没有主 token，SSE 退路必须能走票。票据来源的渠道默认 mobile（与 Link role 口径一致）。
+        """
+        auth = _link_auth(request)
+        if auth is None:
+            return _err(WhaleError("unauthorized", "missing or invalid credential"))
         try:
             body = json.loads(await request.body() or b"{}")
             text = str(body.get("text") or "").strip()
@@ -162,7 +170,8 @@ def create_server(app: Any, *, manage_lifecycle: bool = True) -> Starlette:
             return _err(exc if isinstance(exc, WhaleError) else WhaleError("invalid_params", "bad JSON"))
         queue: asyncio.Queue[tuple[str, Any] | None] = asyncio.Queue()
         req = RunRequest(text=text, conversation_id=body.get("conversation_id"),
-                         channel=str(body.get("channel") or "http")[:24], images=list(body.get("images") or [])[:4],
+                         channel=str(body.get("channel") or ("mobile" if auth else "http"))[:24],
+                         images=list(body.get("images") or [])[:4],
                          on_delta=lambda d: queue.put_nowait(("delta", {"text": d})))
         sub = app.bus.stream(["run.step", "run.started"])
 
@@ -215,12 +224,26 @@ def create_server(app: Any, *, manage_lifecycle: bool = True) -> Starlette:
         async def writer() -> None:
             while True:
                 env = await outbox.get()
+                kick = env.get("__kick__")
+                if kick:
+                    # 服务端主动关闭（如设备撤销联动）：先告原因再关，不断无音信
+                    await ws.send_text(json.dumps(
+                        envelope("error", {"code": str(kick), "message": str(env.get("message") or "")}),
+                        ensure_ascii=False))
+                    await ws.close(code=4403)
+                    break
                 await ws.send_text(json.dumps(env, ensure_ascii=False, default=str))
 
         writer_task = asyncio.create_task(writer())
 
         try:
-            first = json.loads(await asyncio.wait_for(ws.receive_text(), 10))
+            first_raw = await asyncio.wait_for(ws.receive_text(), 10)
+            if len(first_raw.encode("utf-8", "replace")) > LINK_MAX_FRAME_BYTES:
+                await ws.send_json(envelope("error", {"code": "invalid_params", "message": "frame too large"}))
+                await ws.close(code=4400)
+                writer_task.cancel()
+                return
+            first = json.loads(first_raw)
         except Exception:
             writer_task.cancel()
             await ws.close(code=4400)
@@ -232,16 +255,36 @@ def create_server(app: Any, *, manage_lifecycle: bool = True) -> Starlette:
             writer_task.cancel()
             return
         token = hello.get("token") or ws.query_params.get("token")
-        if not _token_ok(app, token):
+        ticket = str(hello.get("ticket") or "").strip()
+        device_id = ""
+        if ticket:
+            # C 鉴权：设备线签发的短期 Link 票；票据客户端固定 role=mobile、绑 device_id
+            try:
+                device_id = app.devices.validate_link_ticket(ticket)
+            except WhaleError as exc:
+                await ws.send_json(envelope("error", {"code": exc.code, "message": exc.message}, first.get("id")))
+                await ws.close(code=4401)
+                writer_task.cancel()
+                return
+            if str(hello.get("role") or "mobile") != "mobile":
+                await ws.send_json(envelope("error", {"code": "invalid_params",
+                                                      "message": "ticket clients must use role=mobile"},
+                                            first.get("id")))
+                await ws.close(code=4400)
+                writer_task.cancel()
+                return
+        elif not _token_ok(app, token):
             await ws.send_json(envelope("error", {"code": "unauthorized", "message": "invalid token"}, first.get("id")))
             await ws.close(code=4401)
             writer_task.cancel()
             return
-        client = Client(id=new_id("cli"), role=str(hello.get("role") or "console")[:16],
+        client = Client(id=new_id("cli"), role=("mobile" if device_id else str(hello.get("role") or "console")[:16]),
                         name=str(hello.get("name") or "client")[:40], send=send,
                         subscriptions=[str(p) for p in (hello.get("subscribe") or ["*"])][:50],
                         capabilities=[c for c in (hello.get("capabilities") or []) if isinstance(c, dict)][:100],
                         meta={k: hello[k] for k in ("device", "version", "platform") if k in hello})
+        if device_id:
+            client.meta["device_id"] = device_id
         await app.hub.attach(client)
         await send(envelope("welcome", {"client_id": client.id, "protocol": PROTOCOL, "server": {
             "name": app.config.value.agent.name, "version": app.version}, "methods": sorted(app.rpc.methods)},
@@ -274,6 +317,9 @@ def create_server(app: Any, *, manage_lifecycle: bool = True) -> Starlette:
         try:
             while True:
                 raw = await ws.receive_text()
+                if len(raw.encode("utf-8", "replace")) > LINK_MAX_FRAME_BYTES:
+                    await send(envelope("error", {"code": "invalid_params", "message": "frame too large"}))
+                    continue
                 try:
                     env = json.loads(raw)
                 except json.JSONDecodeError:
@@ -310,9 +356,25 @@ def create_server(app: Any, *, manage_lifecycle: bool = True) -> Starlette:
             log.exception("hook %s failed", key)
             return _err(WhaleError("internal", repr(exc)))
 
+    def _link_auth(request: Request) -> "str | None":
+        """Bearer token 或 Link ticket（X-Whale-Link-Ticket 头 / ?ticket=）。
+        返回 ""=token 通过 / device_id=ticket 通过 / None=未授权（fail-closed）。"""
+        if _token_ok(app, _bearer(request)):
+            return ""
+        ticket = request.headers.get("x-whale-link-ticket") or request.query_params.get("ticket") or ""
+        if ticket:
+            try:
+                return app.devices.validate_link_ticket(ticket)
+            except WhaleError:
+                return None
+        return None
+
+    def _artifact_authed(request: Request) -> bool:
+        return _link_auth(request) is not None
+
     async def artifact(request: Request) -> Response:
-        if not _token_ok(app, _bearer(request)):
-            return _err(WhaleError("unauthorized", "missing or invalid token"))
+        if not _artifact_authed(request):
+            return _err(WhaleError("unauthorized", "missing or invalid credential"))
         try:
             info, data = app.artifacts.read(request.path_params["id"])
         except WhaleError as exc:
@@ -320,6 +382,34 @@ def create_server(app: Any, *, manage_lifecycle: bool = True) -> Starlette:
         return Response(data, media_type=info["content_type"], headers={
             "Cache-Control": "private, max-age=86400",
             "Content-Disposition": f'inline; filename="{info["name"]}"'})
+
+    async def artifact_upload(request: Request) -> Response:
+        """附件上行：raw body + X-Whale-Name / X-Whale-Content-Type 头 → 201 ArtifactRef（含 sha256）。"""
+        if not _artifact_authed(request):
+            return _err(WhaleError("unauthorized", "missing or invalid credential"))
+        data = await request.body()
+        if not data:
+            return _err(WhaleError("invalid_params", "empty body"))
+        import hashlib
+
+        name = request.headers.get("x-whale-name", "")[:80]
+        ctype = request.headers.get("x-whale-content-type") or "application/octet-stream"
+        try:
+            info = app.artifacts.save(data, content_type=ctype, name=name)
+        except WhaleError as exc:
+            return _err(exc)
+        return JSONResponse({"ok": True, "result": {**info, "sha256": hashlib.sha256(data).hexdigest()}},
+                            status_code=201, headers={"Cache-Control": "no-store"})
+
+    async def artifact_delete(request: Request) -> Response:
+        if not _artifact_authed(request):
+            return _err(WhaleError("unauthorized", "missing or invalid credential"))
+        try:
+            app.artifacts.delete(request.path_params["id"])
+        except WhaleError as exc:
+            return _err(exc)
+        return JSONResponse({"ok": True, "result": {"deleted": request.path_params["id"]}},
+                            headers={"Cache-Control": "no-store"})
 
     root = web_root()
 
@@ -336,7 +426,9 @@ def create_server(app: Any, *, manage_lifecycle: bool = True) -> Starlette:
         Route("/api/chat/stream", chat_stream, methods=["POST"]),
         WebSocketRoute("/api/link", link),
         Route("/api/hooks/{plugin}/{path:path}", hook, methods=["GET", "POST", "PUT"]),
+        Route("/api/artifacts", artifact_upload, methods=["POST"]),
         Route("/api/artifacts/{id}", artifact),
+        Route("/api/artifacts/{id}", artifact_delete, methods=["DELETE"]),
     ]
     routes += app.devices.routes() if hasattr(app.devices, "routes") else []
     if root is not None:
