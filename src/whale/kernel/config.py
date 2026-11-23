@@ -30,8 +30,9 @@ class ProviderConfig(BaseModel):
 class ModelRoute(BaseModel):
     provider: str = ""
     model: str = ""
-    temperature: float = 0.7
+    temperature: float | None = 0.7   # null=不下发该参数（kimi-k3 只收默认温度，实测 0.7 被 400 拒）
     max_tokens: int = 1024
+    reasoning_effort: str = ""   # 非空即透传（如 kimi-k3 的 "high"）；空=不下发该参数
 
 
 class ModelsConfig(BaseModel):
@@ -51,6 +52,9 @@ class AgentConfig(BaseModel):
     max_steps: int = 12
     history_turns: int = 16
     context_budget_chars: int = 24000
+    # 回复档位：fast=边想边流式输出；slow=完整缓冲想完一次性发（对齐 v2 两档慢档语义：
+    # 渠道回复本就完成后投递，slow 档额外关闭 run.delta 流式增量）
+    reply_gear: Literal["fast", "slow"] = "fast"
 
 
 class MemoryConfig(BaseModel):
@@ -89,6 +93,12 @@ class PolicyConfig(BaseModel):
     rules: dict[str, Literal["allow", "ask", "deny"]] = Field(default_factory=dict)
 
 
+class GlassesConfig(BaseModel):
+    # 眼镜面：日程提醒循环（默认关，与 v2 WHALE_SCHEDULE_REMIND 同纪律；静默时段沿用 autonomy.quiet_hours）
+    schedule_remind: bool = False
+    remind_interval_min: int = 5
+
+
 class WhaleConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     models: ModelsConfig = Field(default_factory=ModelsConfig)
@@ -97,6 +107,7 @@ class WhaleConfig(BaseModel):
     autonomy: AutonomyConfig = Field(default_factory=AutonomyConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
     devices: DevicesConfig = Field(default_factory=DevicesConfig)
+    glasses: GlassesConfig = Field(default_factory=GlassesConfig)
     plugins: dict[str, dict[str, Any]] = Field(default_factory=dict)  # plugin_id -> {"enabled":bool, ...}
     channels: dict[str, dict[str, Any]] = Field(default_factory=dict)  # channel_id -> {"kind": "onebot", "enabled": bool, ...}
 

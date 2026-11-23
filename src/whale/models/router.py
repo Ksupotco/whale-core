@@ -16,6 +16,7 @@ from ..kernel.config import Config, ModelRoute
 from ..kernel.db import Database
 from ..kernel.errors import WhaleError
 from ..kernel.events import EventBus
+from ..kernel.http import http_client
 from .base import ChatModel, Completion, EmbeddingModel, Message, ModelError
 from .openai_compat import OpenAICompatChat, OpenAICompatEmbedding
 from .scripted import HashEmbedding, ScriptedModel
@@ -55,8 +56,11 @@ class MeteredModel:
         return isinstance(self.inner, ScriptedModel) and self.inner.offline
 
     async def complete(self, messages: list[Message], **kw: Any) -> Completion:
+        # temperature=None 也要显式传下去：complete() 的签名默认 0.7，None 才触发"不下发"
         kw.setdefault("temperature", self.route.temperature)
         kw.setdefault("max_tokens", self.route.max_tokens)
+        if self.route.reasoning_effort:
+            kw.setdefault("reasoning_effort", self.route.reasoning_effort)
         if not self.offline:
             self.router.reserve()
         stats = self.router.stats.setdefault(self.route.provider or "offline", ProviderStats())
@@ -81,10 +85,14 @@ class ModelRouter:
         self.config = config
         self.db = db
         self.bus = bus
+        self.app: Any = None       # App 装配后回填（读取 http_transport，测试可注入假传输）
         self.stats: dict[str, ProviderStats] = {}
         self._cache: dict[tuple[Any, ...], Any] = {}
         self.overrides: dict[str, Any] = {}  # tests / plugins can inject models per role
         config.on_change(lambda patch: self._cache.clear() if "models" in patch or "secrets" in patch else None)
+
+    def _client(self, timeout: float):
+        return http_client(self.app, timeout=timeout) if self.app is not None else None
 
     def _route(self, role: str) -> ModelRoute:
         models = self.config.value.models
@@ -101,7 +109,8 @@ class ModelRouter:
         key = ("chat", provider.id, provider.base_url, route.model, self.config.secret(f"provider.{provider.id}"))
         if key not in self._cache:
             self._cache[key] = OpenAICompatChat(provider.base_url, route.model,
-                                                self.config.secret(f"provider.{provider.id}"))
+                                                self.config.secret(f"provider.{provider.id}"),
+                                                client=self._client(120.0))
         return self._cache[key]
 
     def chat(self, role: str = "chat") -> MeteredModel:
@@ -128,7 +137,8 @@ class ModelRouter:
         key = ("embed", provider.id, provider.base_url, route.model)
         if key not in self._cache:
             self._cache[key] = OpenAICompatEmbedding(provider.base_url, route.model,
-                                                     self.config.secret(f"provider.{provider.id}"))
+                                                     self.config.secret(f"provider.{provider.id}"),
+                                                     client=self._client(30.0))
         return self._cache[key]
 
     # -- budget ---------------------------------------------------------------
@@ -171,7 +181,7 @@ class ModelRouter:
         model = self.chat(role)
         t0 = time.perf_counter()
         try:
-            out = await model.complete([Message("user", "只回复两个字：在线")], max_tokens=16, temperature=0)
+            out = await model.complete([Message("user", "只回复两个字：在线")], max_tokens=16)
         except WhaleError as exc:
             return {"ok": False, "error": exc.message}
         return {"ok": True, "model": model.name, "reply": out.text[:40],

@@ -52,6 +52,7 @@ class RunRequest:
     mode: str = "chat"
     images: list[str] = field(default_factory=list)          # data: URLs or http(s) URLs
     persona_id: str | None = None
+    model_role: str | None = None                            # None → chat（images 时 vision）；fast = 轻量档
     run_id: str | None = None     # pre-assigned id, so callers can return it before the run starts
     parent_id: str | None = None
     task_id: str | None = None
@@ -127,7 +128,7 @@ class AgentRuntime:
     async def _run(self, req: RunRequest, conv_id: str | None, task: asyncio.Task[Any] | None) -> RunOutcome:
         app = self.app
         cfg = app.config.value
-        model = app.models.chat("vision" if req.images else "chat")
+        model = app.models.chat("vision" if req.images else (req.model_role or "chat"))
         run = await app.runs.create(mode=req.mode, input=req.text, conversation_id=conv_id,
                                     parent_id=req.parent_id, task_id=req.task_id, channel=req.channel,
                                     model=model.name, run_id=req.run_id)
@@ -144,14 +145,17 @@ class AgentRuntime:
             if conv_id:
                 app.conversations.add_message(conv_id, "user", req.text, run_id=run_id,
                                               meta={"images": len(req.images)} if req.images else None)
-            # 1. recall
+            # 1. recall（remember=False 的轻量回合不召回也不回写，如眼镜 quick 档）
             step = await app.runs.step(run_id, "recall", "回忆相关记忆", {"query": req.text[:200]})
             audience = run_audience(req)
-            hits = await app.memory.retrieve(req.text, scope=audience) if req.text.strip() else []
-            used_memories = [h.to_dict(app.memory.half_life) for h in hits]
-            await app.runs.end_step(step, output={"memories": [
-                {"id": m["id"], "kind": m["kind"], "content": m["content"], "score": m["score"], "why": m["why"]}
-                for m in used_memories]}, title=f"回忆到 {len(hits)} 条记忆" if hits else "没有相关记忆")
+            if req.remember and req.text.strip():
+                hits = await app.memory.retrieve(req.text, scope=audience)
+                used_memories = [h.to_dict(app.memory.half_life) for h in hits]
+                await app.runs.end_step(step, output={"memories": [
+                    {"id": m["id"], "kind": m["kind"], "content": m["content"], "score": m["score"], "why": m["why"]}
+                    for m in used_memories]}, title=f"回忆到 {len(hits)} 条记忆" if hits else "没有相关记忆")
+            else:
+                await app.runs.end_step(step, output={"skipped": "remember=false"}, title="轻量回合：不召回记忆")
 
             # 2. context
             persona = app.personas.resolve(req.persona_id or (app.conversations.get(conv_id)["persona_id"]
@@ -160,6 +164,8 @@ class AgentRuntime:
             tools = self._tools(req)
             tool_schemas = [s.tool_schema() for s in tools]
             max_steps = req.max_steps or cfg.agent.max_steps
+            # 慢档（reply_gear=slow）：完整缓冲想完一次性发，不向客户端流式增量
+            stream = cfg.agent.reply_gear != "slow"
 
             # 3. think ⇄ act
             final_text = ""
@@ -178,7 +184,8 @@ class AgentRuntime:
                             await r
 
                 tm = time.perf_counter()
-                completion = await model.complete(messages, tools=tool_schemas or None, on_delta=on_delta)
+                completion = await model.complete(messages, tools=tool_schemas or None,
+                                                  on_delta=on_delta if stream else None)
                 latency = round((time.perf_counter() - tm) * 1000)
                 if not completion.tool_calls:
                     final_text = completion.text.strip()

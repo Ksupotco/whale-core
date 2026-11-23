@@ -43,21 +43,25 @@ class OpenAICompatChat:
         return h
 
     async def complete(self, messages: list[Message], *, tools: list[dict[str, Any]] | None = None,
-                       temperature: float = 0.7, max_tokens: int = 1024,
-                       on_delta: DeltaFn | None = None, json_mode: bool = False) -> Completion:
+                       temperature: float | None = 0.7, max_tokens: int = 1024,
+                       on_delta: DeltaFn | None = None, json_mode: bool = False,
+                       reasoning_effort: str = "") -> Completion:
         if tools and not self.native_tools:
             return await self._complete_prompt_tools(messages, tools, temperature, max_tokens, on_delta)
         body: dict[str, Any] = {
             "model": self.model,
             "messages": [m.to_openai() for m in messages],
-            "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": True,
         }
+        if temperature is not None:
+            body["temperature"] = temperature
         if tools:
             body["tools"] = tools
         if json_mode:
             body["response_format"] = {"type": "json_object"}
+        if reasoning_effort:
+            body["reasoning_effort"] = reasoning_effort
         try:
             return await self._stream(body, on_delta)
         except ModelError as exc:
@@ -93,7 +97,9 @@ class OpenAICompatChat:
         else:
             converted.insert(0, sys_extra)
         body = {"model": self.model, "messages": [m.to_openai() for m in converted],
-                "temperature": temperature, "max_tokens": max_tokens, "stream": True}
+                "max_tokens": max_tokens, "stream": True}
+        if temperature is not None:
+            body["temperature"] = temperature
         result = await self._stream(body, None)
         calls = []
         for raw in _TOOL_RE.findall(result.text):

@@ -91,7 +91,8 @@ function Providers({ cfg, status, onCfg, reloadStatus }) {
 /** @param {{role: any, cfg: any, status: any, onSaved: (c: any) => void}} p */
 function RoleRow({ role, cfg, status, onSaved }) {
   const route = cfg.models[role.id] || {};
-  const [d, setD, dirty] = useDraft({ provider: route.provider || '', model: route.model || '' });
+  const [d, setD, dirty] = useDraft({ provider: route.provider || '', model: route.model || '',
+    reasoning_effort: route.reasoning_effort || '' });
   const [models, setModels] = useState(/** @type {string[]} */ ([]));
   const [test, setTest] = useState(/** @type {any} */ (null));
   const st = status?.roles?.[role.id];
@@ -103,6 +104,10 @@ function RoleRow({ role, cfg, status, onSaved }) {
         <option value="">未设置</option>${cfg.models.providers.map((p) => html`<option key=${p.id} value=${p.id}>${p.label || p.id}</option>`)}</select>
       <input class="input mono" list=${'models-' + role.id} value=${d.model} placeholder="模型名，如 deepseek-chat" aria-label=${role.label + '模型'} onInput=${(e) => setD({ ...d, model: e.currentTarget.value })} />
       <datalist id=${'models-' + role.id}>${models.map((m) => html`<option key=${m} value=${m}></option>`)}</datalist>
+      <select class="input" style=${{ maxWidth: '7.5em' }} value=${d.reasoning_effort} aria-label=${role.label + '思考强度'} title="思考强度（仅支持的模型生效，如 kimi-k3）"
+        onChange=${(e) => setD({ ...d, reasoning_effort: e.currentTarget.value })}>
+        <option value="">默认强度</option><option value="high">high</option><option value="medium">medium</option><option value="low">low</option>
+      </select>
       <${AsyncButton} size="sm" variant="ghost" icon="list" disabled=${!d.provider} title="从服务商拉取模型列表" onClick=${list}>${models.length ? `${models.length} 个模型` : '列出模型'}<//>
       ${dirty ? html`<${AsyncButton} size="sm" variant="primary" icon="check" onClick=${async () => onSaved(await act('config.update', { patch: { models: { [role.id]: d } } }, { ok: `${role.label}模型已保存` }))}>保存<//>` : null}
       ${role.id !== 'embedding' ? html`<${AsyncButton} size="sm" variant="soft" icon="play" disabled=${dirty} title=${dirty ? '先保存' : '发送一条探测消息'} onClick=${async () => setTest(await act('models.test', { role: role.id }, { timeout: 60000 }))}>测试连接<//>` : null}
@@ -131,7 +136,8 @@ function ModelsCard({ cfg, onCfg }) {
 }
 
 function AgentCard({ cfg, onCfg }) {
-  const pick = (a) => ({ name: a.name, timezone: a.timezone, max_steps: a.max_steps, history_turns: a.history_turns });
+  const pick = (a) => ({ name: a.name, timezone: a.timezone, max_steps: a.max_steps, history_turns: a.history_turns,
+    reply_gear: a.reply_gear || 'fast' });
   const [d, setD, dirty] = useDraft(pick(cfg.agent));
   return html`<${Card} id="agent" title="智能体" icon="user" subtitle="名字与时区出现在每一次提示词里；步数上限防止一次行动停不下来。">
     <div class="form-grid">
@@ -140,6 +146,9 @@ function AgentCard({ cfg, onCfg }) {
         <datalist id="tz-list">${ZONES.map((z) => html`<option key=${z} value=${z}></option>`)}</datalist><//>
       <${NumField} label="每次行动最多步数" value=${d.max_steps} min=${1} max=${50} onChange=${(v) => setD({ ...d, max_steps: v })} hint="思考 ⇄ 调用能力的轮数" />
       <${NumField} label="携带历史轮数" value=${d.history_turns} min=${0} max=${100} onChange=${(v) => setD({ ...d, history_turns: v })} hint="对话上下文里带多少轮历史" />
+      <${Field} label="回复档位" hint="慢档=完整缓冲想完一次性发（不配流式增量）"><select class="input" value=${d.reply_gear} onChange=${(e) => setD({ ...d, reply_gear: e.currentTarget.value })}>
+        <option value="fast">快档（流式）</option><option value="slow">慢档（缓冲一次性发）</option>
+      </select><//>
     </div>
     <${SaveBar} dirty=${dirty} onReset=${() => setD(pick(cfg.agent))} onSave=${async () => onCfg(await act('config.update', { patch: { agent: { ...d, max_steps: Number(d.max_steps), history_turns: Number(d.history_turns) } } }, { ok: '已保存' }))} />
   <//>`;

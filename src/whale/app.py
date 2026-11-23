@@ -46,9 +46,13 @@ class App:
         # Plugin webhooks: (plugin_id, path) -> async handler(request) -> Response, served at
         # /api/hooks/{plugin_id}/{path}. Unauthenticated by the core: the plugin verifies its caller.
         self.hooks: dict[tuple[str, str], Any] = {}
+        # 渠道上下文注入与回合后置钩子（channel → callable）；眼镜面在此挂快照/日程抽取。
+        self.context_providers: dict[str, Any] = {}
+        self.turn_hooks: dict[str, Any] = {}
         # Optional httpx transport injected by tests/embedders; plugins build clients with it.
         self.http_transport: Any = None
         self.models = ModelRouter(self.config, self.db, self.bus)
+        self.models.app = self   # 让模型面共享 app.http_transport（测试注入假传输）
         self.capabilities = CapabilityRegistry(self.bus)
         self.policy = Policy(self.config)
         self.approvals = Approvals(self.db, self.bus)
@@ -69,6 +73,9 @@ class App:
         builtin.register(self)
         task_engine.register(self)
         api.register(self)
+        from .glasses import register as register_glasses
+
+        register_glasses(self)
         self._register_jobs()
         self.config.on_change(self._on_config)
         self.started = False
@@ -77,6 +84,7 @@ class App:
         sch = self.scheduler
         sch.handler("memory.maintain", lambda args: self.memory.maintain())
         sch.handler("autonomy.explore", lambda args: self.explorer.explore(args.get("topic")))
+        self.glasses.sync_remind_job()
 
     def _sync_system_jobs(self) -> None:
         cfg = self.config.value
@@ -94,6 +102,8 @@ class App:
         if self.started and "devices" in patch:
             self.scheduler.ensure_system("sys_phone_digest", "手机经历整理成记忆", "phone.digest",
                                          {"every_min": max(5, self.config.value.devices.digest_interval_min)}, True)
+        if self.started and "glasses" in patch:
+            self.glasses.sync_remind_job()
         self.bus.publish_event("config.changed", {"sections": sorted(patch.keys())})
 
     async def start(self) -> None:
